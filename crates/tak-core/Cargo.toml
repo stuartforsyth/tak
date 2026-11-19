@@ -1,0 +1,10 @@
+[package]
+name = "tak-core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tiltak = { git = "https://github.com/MortenLohne/tiltak", rev = "fc4f52f0cb2213664ffd8f395493b86def93f21e", default-features = false }
+board-game-traits = "0.4.0"
+pgn-traits = "0.5.0"

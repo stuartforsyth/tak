@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = ["crates/tak-core", "crates/tak-cli", "crates/tak-godot"]
+
+[workspace.package]
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[profile.release]
+lto = true

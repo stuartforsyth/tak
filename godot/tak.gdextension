@@ -1,0 +1,6 @@
+[configuration]
+entry_symbol = "gdext_rust_init"
+compatibility_minimum = 4.3
+
+[libraries]
+linux.x86_64 = "res://bin/libtak_godot.so"

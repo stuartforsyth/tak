@@ -1,0 +1,260 @@
+extends Node3D
+## The 3D board: frame, squares, coordinate labels, stacks of stones and the highlights.
+
+const MeshLib = preload("res://scripts/mesh_lib.gd")
+const Wood = preload("res://scripts/wood.gd")
+
+const BOARD_TOP := 0.25
+const FLAT_H := 0.13
+const STONE := 0.74
+const WALL_H := 0.62
+const WALL_T := 0.17
+const CAP_R := 0.29
+const CAP_H := 0.68
+const BAR := 0.5
+
+var size := 5
+var _pieces: Node3D
+var _marks: Node3D
+var _prev := {}
+var _flat_mesh: ArrayMesh
+var _wall_mesh: ArrayMesh
+var _cap_mesh: ArrayMesh
+var _white: StandardMaterial3D
+var _black: StandardMaterial3D
+var _hover: MeshInstance3D
+var _mark_mat: StandardMaterial3D
+
+
+func setup(board_size: int) -> void:
+	size = board_size
+	for c in get_children():
+		c.queue_free()
+	_prev = {}
+	_flat_mesh = MeshLib.bevel_box(STONE, FLAT_H, STONE, 0.035)
+	_wall_mesh = MeshLib.bevel_box(STONE, WALL_H, WALL_T, 0.035)
+	_cap_mesh = MeshLib.capstone(CAP_R, CAP_H, 0.26)
+	_white = Wood.make(Color(0.90, 0.80, 0.63), Color(0.74, 0.61, 0.44), 11, 0.38, 0.9, 5)
+	_black = Wood.make(Color(0.27, 0.16, 0.11), Color(0.11, 0.065, 0.045), 23, 0.36, 0.9, 5)
+	_build_board()
+	_pieces = Node3D.new()
+	add_child(_pieces)
+	_marks = Node3D.new()
+	add_child(_marks)
+	_make_hover()
+
+
+func _build_board() -> void:
+	var frame := Wood.make(Color(0.31, 0.17, 0.10), Color(0.14, 0.075, 0.045), 5, 0.4, 0.5, 4)
+	# One playing surface: every square is the same wood, cut from a slightly different part of
+	# the plank, with grooves between them. No chequering.
+	var tiles: Array[StandardMaterial3D] = []
+	for sd in [31, 47, 59, 71]:
+		tiles.append(Wood.make(Color(0.64, 0.49, 0.32), Color(0.48, 0.34, 0.21), sd, 0.45, 0.7, 5))
+	var field := float(size)
+	var outer := field + 2.0 * BAR
+	# Underlay beneath the squares, then four border bars standing slightly proud of them.
+	var under := MeshInstance3D.new()
+	under.mesh = MeshLib.bevel_box(field + 0.02, 0.2, field + 0.02, 0.0)
+	under.material_override = frame
+	add_child(under)
+	var bars := [
+		[Vector3(outer, 0.27, BAR), Vector3(0, 0, -(field + BAR) * 0.5)],
+		[Vector3(outer, 0.27, BAR), Vector3(0, 0, (field + BAR) * 0.5)],
+		[Vector3(BAR, 0.27, field), Vector3(-(field + BAR) * 0.5, 0, 0)],
+		[Vector3(BAR, 0.27, field), Vector3((field + BAR) * 0.5, 0, 0)],
+	]
+	for b in bars:
+		var mi := MeshInstance3D.new()
+		mi.mesh = MeshLib.bevel_box(b[0].x, b[0].y, b[0].z, 0.05)
+		mi.material_override = frame
+		mi.position = b[1]
+		add_child(mi)
+	var tile_mesh := MeshLib.bevel_box(0.95, BOARD_TOP - 0.2, 0.95, 0.012)
+	for f in size:
+		for r in size:
+			var mi := MeshInstance3D.new()
+			mi.mesh = tile_mesh
+			mi.material_override = tiles[hash(Vector2i(f, r)) % tiles.size()]
+			mi.position = Vector3(_x(f), 0.2, _z(r + 1))
+			add_child(mi)
+	for i in size:
+		var letter := char(97 + i)
+		_label(letter, Vector3(_x(i), 0.275, (field + BAR) * 0.5))
+		_label(letter, Vector3(_x(i), 0.275, -(field + BAR) * 0.5))
+		_label(str(i + 1), Vector3(-(field + BAR) * 0.5, 0.275, _z(i + 1)))
+		_label(str(i + 1), Vector3((field + BAR) * 0.5, 0.275, _z(i + 1)))
+
+
+func _label(text: String, pos: Vector3) -> void:
+	var l := Label3D.new()
+	l.text = text
+	l.font_size = 72
+	l.pixel_size = 0.0055
+	l.modulate = Color(0.86, 0.68, 0.36)
+	l.outline_size = 0
+	l.rotation_degrees = Vector3(-90, 0, 0)
+	l.position = pos
+	add_child(l)
+
+
+func _make_hover() -> void:
+	_hover = MeshInstance3D.new()
+	var q := PlaneMesh.new()
+	q.size = Vector2(0.92, 0.92)
+	_hover.mesh = q
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.albedo_color = Color(1.0, 0.92, 0.7, 0.22)
+	_hover.material_override = m
+	_hover.visible = false
+	_hover.position.y = BOARD_TOP + 0.003
+	add_child(_hover)
+	_mark_mat = StandardMaterial3D.new()
+	_mark_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_mark_mat.albedo_color = Color(0.45, 1.0, 0.75)
+	_mark_mat.emission_enabled = true
+	_mark_mat.emission = Color(0.3, 1.0, 0.7)
+	_mark_mat.emission_energy_multiplier = 1.6
+
+
+# ---- coordinates -------------------------------------------------------------
+
+func _x(file: int) -> float:
+	return file - (size - 1) * 0.5
+
+
+## Rank 1 is nearest the camera (+z).
+func _z(rank: int) -> float:
+	return (size + 1) * 0.5 - rank
+
+
+func square_name(file: int, rank: int) -> String:
+	return char(97 + file) + str(rank)
+
+
+func get_all_squares() -> Array:
+	var out := []
+	for f in size:
+		for r in range(1, size + 1):
+			out.append(square_name(f, r))
+	return out
+
+
+func square_pos(sq: String) -> Vector3:
+	return Vector3(_x(sq.unicode_at(0) - 97), BOARD_TOP, _z(int(sq.substr(1))))
+
+
+## Square under a world point on the board plane, or "" when off the board.
+func world_to_square(p: Vector3) -> String:
+	var f := int(floor(p.x + size * 0.5))
+	var r := int(round((size + 1) * 0.5 - p.z))
+	if f < 0 or f >= size or r < 1 or r > size:
+		return ""
+	return square_name(f, r)
+
+
+# ---- position ----------------------------------------------------------------
+
+## "1,x,1S,2/x3,.. 1 4" -> { "a1": "12", "c4": "1S" } bottom-to-top, trailing S/C marks the top piece.
+static func parse_tps(tps: String, n: int) -> Dictionary:
+	var out := {}
+	var rows := tps.split(" ")[0].split("/")
+	for ri in rows.size():
+		var rank := n - ri
+		var file := 0
+		for cell in rows[ri].split(","):
+			if cell.begins_with("x"):
+				file += 1 if cell.length() == 1 else int(cell.substr(1))
+			else:
+				out[char(97 + file) + str(rank)] = cell
+				file += 1
+	return out
+
+
+func show_position(stacks: Dictionary, animate: bool) -> void:
+	for c in _pieces.get_children():
+		c.queue_free()
+	for sq in stacks:
+		var changed: bool = animate and _prev.get(sq, "") != stacks[sq]
+		_pieces.add_child(_build_stack(sq, stacks[sq], changed))
+	_prev = stacks.duplicate()
+
+
+func _build_stack(sq: String, s: String, animate: bool) -> Node3D:
+	var root := Node3D.new()
+	root.position = square_pos(sq)
+	var mod := ""
+	if s.ends_with("S") or s.ends_with("C"):
+		mod = s.substr(s.length() - 1)
+		s = s.substr(0, s.length() - 1)
+	var y := 0.0
+	var seed_base := hash(sq)
+	for i in s.length():
+		var white := s[i] == "1"
+		var top := i == s.length() - 1
+		var piece := MeshInstance3D.new()
+		piece.material_override = _white if white else _black
+		var rng := RandomNumberGenerator.new()
+		rng.seed = seed_base + i * 7919
+		var jitter := Vector3(rng.randf_range(-0.012, 0.012), 0, rng.randf_range(-0.012, 0.012))
+		var yaw := rng.randf_range(-1.6, 1.6)
+		var h := FLAT_H
+		if top and mod == "S":
+			piece.mesh = _wall_mesh
+			piece.rotation_degrees = Vector3(0, yaw * 0.5, 0)
+			h = WALL_H
+		elif top and mod == "C":
+			piece.mesh = _cap_mesh
+			h = CAP_H
+		else:
+			piece.mesh = _flat_mesh
+			piece.rotation_degrees = Vector3(0, yaw, 0)
+		piece.position = jitter + Vector3(0, y, 0)
+		root.add_child(piece)
+		if animate:
+			var final_y := y
+			piece.position.y = final_y + 0.9
+			var tw := create_tween()
+			tw.tween_property(piece, "position:y", final_y, 0.3).set_delay(0.05 * i).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		y += h if not (top and mod != "") else 0.0
+	return root
+
+
+# ---- highlights --------------------------------------------------------------
+
+func set_hover(sq: String) -> void:
+	_hover.visible = sq != ""
+	if sq != "":
+		var p := square_pos(sq)
+		_hover.position = Vector3(p.x, BOARD_TOP + 0.003, p.z)
+
+
+## Rings on the squares the player may click next; `selected` gets a gold ring.
+func set_marks(targets: Array, selected: String) -> void:
+	for c in _marks.get_children():
+		c.queue_free()
+	for sq in targets:
+		_ring(sq, _mark_mat, 0.34)
+	if selected != "":
+		var gold := _mark_mat.duplicate() as StandardMaterial3D
+		gold.albedo_color = Color(1.0, 0.8, 0.3)
+		gold.emission = Color(1.0, 0.75, 0.25)
+		_ring(selected, gold, 0.42)
+
+
+func _ring(sq: String, mat: Material, radius: float) -> void:
+	var t := TorusMesh.new()
+	t.inner_radius = radius - 0.035
+	t.outer_radius = radius
+	t.rings = 48
+	t.ring_segments = 8
+	var mi := MeshInstance3D.new()
+	mi.mesh = t
+	mi.material_override = mat
+	mi.scale = Vector3(1, 0.25, 1)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var p := square_pos(sq)
+	mi.position = Vector3(p.x, BOARD_TOP + 0.01, p.z)
+	_marks.add_child(mi)
