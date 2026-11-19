@@ -270,10 +270,10 @@ func human_turn() -> bool:
 	return game.white_to_move() == human_white
 
 
-func _refresh(animate: bool) -> void:
+func _refresh(animate: bool, ptn: String = "") -> void:
 	stacks = BoardView.parse_tps(game.tps(), size)
 	legal = game.legal_moves()
-	view.show_position(stacks, animate)
+	view.show_position(stacks, animate, ptn)
 	_update_marks()
 	_update_hud()
 
@@ -354,7 +354,7 @@ func _process(_dt: float) -> void:
 	var err := game.play(r["move"])
 	if err != "":
 		push_error("engine produced an illegal move: " + err)
-	_refresh(true)
+	_refresh(true, r["move"])
 
 
 # ---- input -------------------------------------------------------------------
@@ -441,7 +441,7 @@ func _play_human(ptn: String) -> void:
 		push_warning(err)
 		return
 	sel = {}
-	_refresh(true)
+	_refresh(true, ptn)
 	if game.outcome() == 0:
 		_start_ai()
 
@@ -630,7 +630,10 @@ func _run_demo(args: PackedStringArray) -> void:
 		for m in ["d4", "a4", "a1", "d3", "b1", "c4", "a1>", "c3", "a1", "c2", "a1>", "d2"]:
 			game.play(m)
 		_refresh(false)
-		if not "--nosel" in args:
+		if "--slide" in args:
+			game.play("3b1>12")
+			_refresh(true, "3b1>12")
+		elif not "--nosel" in args:
 			_click("b1")
 			_set_carry(2)
 	else:
@@ -640,7 +643,11 @@ func _run_demo(args: PackedStringArray) -> void:
 			var r := game.ai_move(0)
 			game.play(r["move"])
 		_refresh(false)
-	await get_tree().create_timer(1.2).timeout
+	var wait := 1.2
+	for a in args:
+		if a.begins_with("--wait="):
+			wait = float(a.substr(7))
+	await get_tree().create_timer(wait).timeout
 	await RenderingServer.frame_post_draw
 	get_viewport().get_texture().get_image().save_png(demo_shot)
 	get_tree().quit()

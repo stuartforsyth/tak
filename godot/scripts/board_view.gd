@@ -19,6 +19,8 @@ var _pieces: Node3D
 var _marks: Node3D
 var _prev := {}
 var _nodes := {}   # square -> Array of piece nodes, bottom to top
+var _slides := {}  # square -> { from: Vector3 world, count: int, group: int } for the move being shown
+var _move_re := RegEx.create_from_string("^(\\d?)([a-h][1-8])([+\\-<>])(\\d*)$")
 var _flat_mesh: ArrayMesh
 var _wall_mesh: ArrayMesh
 var _cap_mesh: ArrayMesh
@@ -176,14 +178,41 @@ static func parse_tps(tps: String, n: int) -> Dictionary:
 	return out
 
 
-func show_position(stacks: Dictionary, animate: bool) -> void:
+## `ptn` is the move just played; a stack move makes its stones fly from the source square.
+func show_position(stacks: Dictionary, animate: bool, ptn: String = "") -> void:
 	for c in _pieces.get_children():
 		c.queue_free()
 	_nodes = {}
+	_slides = _slides_for(ptn) if animate else {}
 	for sq in stacks:
 		var changed: bool = animate and _prev.get(sq, "") != stacks[sq]
 		_pieces.add_child(_build_stack(sq, stacks[sq], changed))
 	_prev = stacks.duplicate()
+
+
+## For a stack move, where each landing square's new stones came from.
+func _slides_for(ptn: String) -> Dictionary:
+	var out := {}
+	var g := _move_re.search(ptn)
+	if g == null:
+		return out
+	var n := int(g.get_string(1)) if g.get_string(1) != "" else 1
+	var src := g.get_string(2)
+	var dir := g.get_string(3)
+	var drops: Array = []
+	if g.get_string(4) == "":
+		drops = [n]
+	else:
+		for ch in g.get_string(4):
+			drops.append(int(ch))
+	var step := {"+": Vector2i(0, 1), "-": Vector2i(0, -1), "<": Vector2i(-1, 0), ">": Vector2i(1, 0)}[dir] as Vector2i
+	var f := src.unicode_at(0) - 97
+	var r := int(src.substr(1))
+	for k in drops.size():
+		f += step.x
+		r += step.y
+		out[square_name(f, r)] = {"from": square_pos(src), "count": drops[k], "group": k}
+	return out
 
 
 func _build_stack(sq: String, s: String, animate: bool) -> Node3D:
@@ -219,18 +248,37 @@ func _build_stack(sq: String, s: String, animate: bool) -> Node3D:
 			piece.rotation_degrees = Vector3(0, yaw, 0)
 		piece.position = jitter + Vector3(0, y, 0)
 		root.add_child(piece)
+		piece.set_meta("base_y", y)
 		nodes.append(piece)
 		top_y = y + h
-		if animate:
+		var slide: Variant = _slides.get(sq)
+		if slide != null:
+			if i >= s.length() - int(slide["count"]):
+				_slide_in(piece, root.position, slide, i - (s.length() - int(slide["count"])))
+		elif animate:
 			var final_y := y
 			piece.position.y = final_y + 0.9
-			var tw := create_tween()
+			var tw := piece.create_tween()
 			tw.tween_property(piece, "position:y", final_y, 0.3).set_delay(0.05 * i).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 		y += h if not (top and mod != "") else 0.0
 	_nodes[sq] = nodes
 	if nodes.size() >= 2:
 		_add_count(root, nodes.size(), top_y, mod, s.ends_with("1"), animate)
 	return root
+
+
+## Fly a stone from the source square to its place, in a low arc. Later landing squares wait
+## for the earlier ones, so the stack visibly deals out along the line.
+func _slide_in(piece: Node3D, dest_world: Vector3, slide: Dictionary, index_in_group: int) -> void:
+	var to := piece.position
+	var from := (slide["from"] as Vector3) - dest_world + Vector3(0, to.y + 0.25, 0)
+	var delay := 0.16 * int(slide["group"]) + 0.05 * index_in_group
+	piece.visible = false
+	var tw := piece.create_tween()
+	tw.tween_interval(delay)
+	tw.tween_callback(piece.show)
+	tw.tween_method(func(t: float) -> void:
+		piece.position = from.lerp(to, t) + Vector3(0, 0.3 * sin(PI * t), 0), 0.0, 1.0, 0.34).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 
 
 ## The stack height, written on the top face so it can never drift from its stack. A wall or
@@ -262,8 +310,12 @@ func _add_count(root: Node3D, count: int, top_y: float, mod: String, top_white: 
 		l.outline_modulate = Color(0.06, 0.03, 0.02)
 	root.add_child(l)
 	if animate:
+		# Fade fill and outline together, after the stones have landed.
 		l.modulate.a = 0.0
-		create_tween().tween_property(l, "modulate:a", 1.0, 0.25).set_delay(0.3)
+		l.outline_modulate.a = 0.0
+		var tw := l.create_tween().set_parallel()
+		tw.tween_property(l, "modulate:a", 1.0, 0.25).set_delay(0.5)
+		tw.tween_property(l, "outline_modulate:a", 1.0, 0.25).set_delay(0.5)
 
 
 ## Lift the top `n` stones of a stack so the player sees how many are in hand.
@@ -273,12 +325,9 @@ func set_lift(sq: String, n: int) -> void:
 		for i in nodes.size():
 			var lifted: bool = key == sq and i >= nodes.size() - n
 			var node: Node3D = nodes[i]
-			var base := node.get_meta("base_y", node.position.y) as float
-			if not node.has_meta("base_y"):
-				node.set_meta("base_y", base)
-			var want := base + (LIFT if lifted else 0.0)
+			var want := (node.get_meta("base_y") as float) + (LIFT if lifted else 0.0)
 			if absf(node.position.y - want) > 0.001:
-				create_tween().tween_property(node, "position:y", want, 0.12).set_ease(Tween.EASE_OUT)
+				node.create_tween().tween_property(node, "position:y", want, 0.12).set_ease(Tween.EASE_OUT)
 
 
 # ---- highlights --------------------------------------------------------------
