@@ -30,6 +30,8 @@ var _black: StandardMaterial3D
 var _hover: MeshInstance3D
 var _mark_mat: StandardMaterial3D
 var coords_visible := true
+var counts_visible := false
+var _yaw := 0.0   # camera orbit angle in radians; flat labels turn with it so they stay upright
 var _coord_labels: Array[Label3D] = []
 
 
@@ -104,11 +106,31 @@ func _label(text: String, pos: Vector3) -> void:
 	l.pixel_size = 0.0055
 	l.modulate = Color(0.86, 0.68, 0.36)
 	l.outline_size = 0
-	l.rotation_degrees = Vector3(-90, 0, 0)
+	l.rotation_degrees = _flat_rot()
+	l.add_to_group("flat_label")
 	l.position = pos
 	l.visible = coords_visible
 	_coord_labels.append(l)
 	add_child(l)
+
+
+func _flat_rot() -> Vector3:
+	return Vector3(-90, rad_to_deg(_yaw), 0)
+
+
+## Turn every flat label with the camera so the text keeps reading the right way up.
+func set_yaw(yaw: float) -> void:
+	_yaw = yaw
+	for l in get_tree().get_nodes_in_group("flat_label"):
+		(l as Label3D).rotation_degrees = _flat_rot()
+	for b in get_tree().get_nodes_in_group("count_label"):
+		(b as Node3D).position = _badge_pos(b.get_meta("top_y"))
+
+
+func set_counts(on: bool) -> void:
+	counts_visible = on
+	for b in get_tree().get_nodes_in_group("count_label"):
+		(b as Node3D).visible = on
 
 
 func set_coords(on: bool) -> void:
@@ -277,7 +299,7 @@ func _build_stack(sq: String, s: String, animate: bool) -> Node3D:
 		y += h if not (top and mod != "") else 0.0
 	_nodes[sq] = nodes
 	if nodes.size() >= 2:
-		_add_count(root, nodes.size(), top_y, mod, s.ends_with("1"), animate)
+		_add_count(root, nodes.size(), top_y)
 	return root
 
 
@@ -295,41 +317,63 @@ func _slide_in(piece: Node3D, dest_world: Vector3, slide: Dictionary, index_in_g
 		piece.position = from.lerp(to, t) + Vector3(0, 0.3 * sin(PI * t), 0), 0.0, 1.0, 0.34).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 
 
-## The stack height, written on the top face so it can never drift from its stack. A wall or
-## capstone has no flat top, so those get a small billboard just above the piece instead.
-func _add_count(root: Node3D, count: int, top_y: float, mod: String, top_white: bool, animate: bool) -> void:
+## Stack height as a small badge floating above the stack: a dark opaque disc with the number
+## on it. It always faces the camera and stays the same size on screen, whatever the distance.
+func _add_count(root: Node3D, count: int, top_y: float) -> void:
+	var badge := Node3D.new()
+	badge.set_meta("top_y", top_y)
+	badge.position = _badge_pos(top_y)
+	badge.visible = counts_visible
+	badge.add_to_group("count_label")
+	var disc := Sprite3D.new()
+	disc.texture = _badge_texture()
+	disc.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	disc.fixed_size = true
+	disc.no_depth_test = true
+	disc.shaded = false
+	disc.pixel_size = 0.0006
+	disc.render_priority = 0
+	badge.add_child(disc)
 	var l := Label3D.new()
 	l.text = str(count)
+	l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	l.fixed_size = true
+	l.no_depth_test = true
 	l.shaded = false
-	l.font_size = 96
-	l.outline_size = 22
-	var ink := Color(0.16, 0.08, 0.04)
-	var halo := Color(0.95, 0.85, 0.65)
-	if mod == "":
-		l.pixel_size = 0.0058
-		l.rotation_degrees = Vector3(-90, 0, 0)
-		l.position = Vector3(0, top_y + 0.004, 0.02)
-		if top_white:
-			l.modulate = ink
-			l.outline_modulate = halo
-		else:
-			l.modulate = halo
-			l.outline_modulate = ink
-	else:
-		l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-		l.no_depth_test = true
-		l.pixel_size = 0.0032
-		l.position = Vector3(0, top_y + 0.2, 0)
-		l.modulate = halo
-		l.outline_modulate = Color(0.06, 0.03, 0.02)
-	root.add_child(l)
-	if animate:
-		# Fade fill and outline together, after the stones have landed.
-		l.modulate.a = 0.0
-		l.outline_modulate.a = 0.0
-		var tw := l.create_tween().set_parallel()
-		tw.tween_property(l, "modulate:a", 1.0, 0.25).set_delay(0.5)
-		tw.tween_property(l, "outline_modulate:a", 1.0, 0.25).set_delay(0.5)
+	l.font_size = 30
+	l.outline_size = 0
+	l.pixel_size = 0.0006
+	l.render_priority = 1
+	l.modulate = Color(1.0, 0.92, 0.72)
+	badge.add_child(l)
+	root.add_child(badge)
+
+
+## Just in front of the stack's top, toward the camera, so on screen it sits against its own
+## stack rather than above it, where it would read as belonging to the square behind.
+func _badge_pos(top_y: float) -> Vector3:
+	return Vector3(sin(_yaw) * 0.36, top_y - 0.04, cos(_yaw) * 0.36)
+
+
+## Opaque dark disc with a thin gold rim, drawn once.
+static var _badge_tex: ImageTexture
+
+func _badge_texture() -> ImageTexture:
+	if _badge_tex != null:
+		return _badge_tex
+	var d := 40
+	var img := Image.create(d, d, false, Image.FORMAT_RGBA8)
+	var c := (d - 1) * 0.5
+	for y in d:
+		for x in d:
+			var r := Vector2(x - c, y - c).length()
+			var col := Color(0.10, 0.06, 0.035, 1.0)
+			if r > c - 2.5:
+				col = Color(0.85, 0.65, 0.3, 1.0)
+			col.a = clampf(c + 0.5 - r, 0.0, 1.0)
+			img.set_pixel(x, y, col)
+	_badge_tex = ImageTexture.create_from_image(img)
+	return _badge_tex
 
 
 ## Lift the top `n` stones of a stack so the player sees how many are in hand.

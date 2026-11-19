@@ -15,31 +15,69 @@ fan project and is not affiliated with or endorsed by them or Cheapass Games.
 - Play as white or black.
 - Stack moves slide stone by stone from the source square, and a winning road glows gold.
 - "Pick up N" and "Drop N" labels show what is in your hand; the mouse wheel sets both counts.
-- A checkbox hides the board coordinates.
+- Rotate the board with `Q` and `E` to look at a position from any side.
+- Checkboxes toggle the board coordinates (on by default) and the stack-size numbers (off by default).
 - Procedurally generated wood board and stones, with shadows, ambient occlusion and glow.
   There are no art assets to download.
 - A terminal version for quick games and testing.
 
-## Requirements
+## Install
 
-- Rust (stable) and Cargo.
-- [Godot](https://godotengine.org/) 4.3 or newer (developed on 4.7.1).
-- Linux x86_64 is the only platform tested so far.
+There are no prebuilt downloads yet, so you build the game once from source. It takes a few
+minutes, mostly compiling the Rust engine. You need:
 
-## Build and run
+- [Rust](https://rustup.rs/) (stable, with Cargo) and `git` (Cargo fetches the Tiltak engine from GitHub).
+- [Godot](https://godotengine.org/download) 4.3 or newer (developed on 4.7.1), the standard
+  version, not .NET.
+- A computer with a Vulkan-capable graphics card and current drivers.
 
-```
-./run.sh                           # play (builds the Rust bridge first if needed)
-```
+Then get the source: `git clone <this repository's URL>` and `cd tak`.
 
-Or step by step:
+### Linux (x86_64; the only platform tested so far)
 
-```
-./build.sh                         # builds the Rust bridge, copies it to godot/bin/
-godot --path godot                 # play
-```
+1. Install a C compiler and linker: `sudo apt install build-essential` (Debian/Ubuntu) or
+   `sudo dnf install gcc` (Fedora).
+2. Install Rust with rustup, and Godot from godotengine.org or your package manager. Make sure
+   `godot` is on your `PATH`.
+3. In the project folder, run `./run.sh`. The first run builds the Rust bridge, then starts the game.
 
-Terminal version:
+### macOS (not yet tested)
+
+1. Install the Xcode command line tools: `xcode-select --install`.
+2. Install Rust with rustup. Download Godot and drag it to Applications.
+3. In the project folder, build and run with the Godot app's executable:
+   ```
+   GODOT=/Applications/Godot.app/Contents/MacOS/Godot ./run.sh
+   ```
+   If macOS refuses to open Godot or the built library because it is from an unidentified
+   developer, allow it under System Settings > Privacy & Security, or run
+   `xattr -dr com.apple.quarantine /Applications/Godot.app`.
+
+### Windows (not yet tested)
+
+1. Install the [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/) with the
+   "Desktop development with C++" workload, then Rust with rustup (choose the MSVC toolchain),
+   and Git.
+2. Download Godot and unzip it somewhere.
+3. In PowerShell, in the project folder:
+   ```
+   cargo build --release -p tak-godot
+   mkdir godot\bin
+   copy target\release\tak_godot.dll godot\bin\
+   C:\path\to\Godot_v4.x-stable_win64.exe --path godot
+   ```
+   (From Git Bash, `GODOT=/c/path/to/Godot.exe ./run.sh` does the same.)
+
+### If something goes wrong
+
+- *"Can't open dynamic library" or the board never appears:* the Rust bridge is missing or built
+  for another platform. Delete `godot/bin` and build again.
+- *Black screen or a rendering error:* update your graphics drivers; the game needs Vulkan.
+- Please report problems with your operating system, graphics card and the text of any error.
+
+## Terminal version
+
+A text-only game, for quick games and testing:
 
 ```
 cargo run --release -p tak-cli -- 5 medium     # size 4|5|6, level easy|medium|hard
@@ -57,6 +95,7 @@ cargo run --release -p tak-cli -- 5 medium     # size 4|5|6, level easy|medium|h
 | Drop one more on the same square | Click that square again |
 | Continue to the next square | Click the next square along the line. The move plays when the hand is empty |
 | Cancel a move | Right-click or `Esc` |
+| Rotate the board | `Q` / `E` turn it left / right in 45° steps; `R` returns to the default view. The labels turn with the board |
 | Undo | `U`, `Ctrl+Z` or the Undo button. Takes back your last move and the engine's reply; if the engine is still thinking, its search is cancelled |
 
 Green rings show the squares you can click next. A gold ring marks the selected stack. On the

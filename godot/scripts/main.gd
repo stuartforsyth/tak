@@ -23,6 +23,10 @@ var hover_sq := ""
 var thinking := false
 var demo_shot := ""
 var cam_offset := Vector3(0, 8, 7)
+var cam_yaw := 0.0             # orbit angle now, radians
+var yaw_target := 0.0          # where the orbit is heading, degrees
+var _yaw_tween: Tween
+const ORBIT_STEP := 45.0
 var _move_re := RegEx.create_from_string("^(\\d?)([a-h][1-8])([+\\-<>])(\\d*)$")
 
 var status: Label
@@ -30,6 +34,7 @@ var banner: Label
 var kind_buttons := {}
 var undo_btn: Button
 var carry_label: Label
+var counts_box: CheckBox
 var hand_label: Label
 var size_opt: OptionButton
 var level_opt: OptionButton
@@ -43,6 +48,8 @@ func _ready() -> void:
 	for a in args:
 		if a.begins_with("--shot="):
 			demo_shot = a.substr(7)
+		elif a == "--counts":
+			counts_box.button_pressed = true
 		elif a.begins_with("--size="):
 			size = int(a.substr(7))
 	_new_game()
@@ -116,6 +123,34 @@ func _build_scene() -> void:
 	get_viewport().size_changed.connect(_fit_camera)
 
 
+## Turn the board by `deg` degrees (Q and E), easing there; each press adds to the target.
+func _orbit(deg: float, animate := true) -> void:
+	yaw_target += deg
+	_orbit_to(yaw_target, animate)
+
+
+## R: back to the default view by the shortest way round.
+func _reset_orbit() -> void:
+	yaw_target = roundf(yaw_target / 360.0) * 360.0
+	_orbit_to(yaw_target, true)
+
+
+func _orbit_to(deg: float, animate: bool) -> void:
+	if _yaw_tween != null:
+		_yaw_tween.kill()
+	if not animate:
+		_set_yaw(deg_to_rad(deg))
+		return
+	_yaw_tween = create_tween()
+	_yaw_tween.tween_method(_set_yaw, cam_yaw, deg_to_rad(deg), 0.35).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+
+func _set_yaw(yaw: float) -> void:
+	cam_yaw = yaw
+	_fit_camera()
+	view.set_yaw(yaw)
+
+
 func _frame_camera() -> void:
 	cam_offset = Vector3(0, size * 0.9 + 2.4, size * 1.0 + 3.2)
 	camera.attributes = CameraAttributesPractical.new()
@@ -130,7 +165,7 @@ func _fit_camera() -> void:
 	var tan_half_h := tan(deg_to_rad(camera.fov) * 0.5) * aspect
 	var need := (size + 1.3) * 0.55 / tan_half_h
 	var back := maxf(1.0, need / cam_offset.length())
-	camera.look_at_from_position(cam_offset * back, Vector3(0, 0.15, 0.1))
+	camera.look_at_from_position(cam_offset.rotated(Vector3.UP, cam_yaw) * back, Vector3(0, 0.15, 0.1))
 	var attr := camera.attributes as CameraAttributesPractical
 	attr.dof_blur_far_enabled = true
 	attr.dof_blur_far_distance = cam_offset.length() * back + size * 0.9
@@ -195,6 +230,12 @@ func _build_hud() -> void:
 	cb.focus_mode = Control.FOCUS_NONE
 	cb.toggled.connect(func(on: bool) -> void: view.set_coords(on))
 	cv.add_child(cb)
+	var kb := CheckBox.new()
+	counts_box = kb
+	kb.text = "Stack counts"
+	kb.focus_mode = Control.FOCUS_NONE
+	kb.toggled.connect(func(on: bool) -> void: view.set_counts(on))
+	cv.add_child(kb)
 	var nb := Button.new()
 	nb.text = "New game"
 	nb.pressed.connect(_on_new_pressed)
@@ -447,6 +488,9 @@ func _unhandled_input(ev: InputEvent) -> void:
 			KEY_C: _select_kind("C")
 			KEY_ESCAPE: _cancel()
 			KEY_U: _undo()
+			KEY_Q: _orbit(-ORBIT_STEP)
+			KEY_E: _orbit(ORBIT_STEP)
+			KEY_R: _reset_orbit()
 			KEY_Z:
 				if ev.ctrl_pressed:
 					_undo()
@@ -713,6 +757,8 @@ func _move_click(sq: String) -> void:
 func _run_demo(args: PackedStringArray) -> void:
 	var plies := 14
 	for a in args:
+		if a.begins_with("--yaw="):
+			_orbit(float(a.substr(6)), false)
 		if a.begins_with("--plies="):
 			plies = int(a.substr(8))
 	if "--stackdemo" in args:
@@ -758,6 +804,16 @@ func _run_selftest() -> void:
 			print("FAIL pick ", sq, " -> ", got)
 			fails += 1
 	print("pick round-trip: ", "ok" if fails == 0 else "FAILED")
+	for deg in [90.0, 45.0, 180.0]:
+		_orbit(deg, false)
+		var orbit_fails := 0
+		for sq in view.get_all_squares():
+			if _pick(camera.unproject_position(view.square_pos(sq))) != sq:
+				orbit_fails += 1
+		print("pick round-trip at yaw ", yaw_target, ": ", "ok" if orbit_fails == 0 else "FAILED")
+	_reset_orbit()
+	await get_tree().create_timer(0.6).timeout
+	print("reset: yaw=", snappedf(cam_yaw, 0.001), " (expect a multiple of 2pi)")
 	_click("a1")                       # opening: places a black stone
 	await _wait_ai()
 	var count_a := _count_pieces()

@@ -4,3 +4,5 @@ compatibility_minimum = 4.3
 
 [libraries]
 linux.x86_64 = "res://bin/libtak_godot.so"
+windows.x86_64 = "res://bin/tak_godot.dll"
+macos = "res://bin/libtak_godot.dylib"
