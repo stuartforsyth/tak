@@ -2,23 +2,34 @@ extends RefCounted
 ## Procedural meshes for the pieces. Everything is generated, so there are no art assets.
 
 
-## Box with the top edges chamfered by `b`. Origin at the bottom centre.
-static func bevel_box(w: float, h: float, d: float, b: float) -> ArrayMesh:
+## Box with chamfered top edges, and bottom edges too when `both` is set, so stacked pieces
+## show a clear seam between layers. Origin at the bottom centre.
+static func bevel_box(w: float, h: float, d: float, b: float, both: bool = false) -> ArrayMesh:
 	var hw := w * 0.5
 	var hd := d * 0.5
-	var yb := h - b
-	var ring0: Array[Vector3] = [Vector3(-hw, 0, -hd), Vector3(hw, 0, -hd), Vector3(hw, 0, hd), Vector3(-hw, 0, hd)]
-	var ring1: Array[Vector3] = [Vector3(-hw, yb, -hd), Vector3(hw, yb, -hd), Vector3(hw, yb, hd), Vector3(-hw, yb, hd)]
-	var ring2: Array[Vector3] = [Vector3(-hw + b, h, -hd + b), Vector3(hw - b, h, -hd + b), Vector3(hw - b, h, hd - b), Vector3(-hw + b, h, hd - b)]
+	var rings: Array = []   # each: [y, inset]
+	if both:
+		rings = [[0.0, b], [b, 0.0], [h - b, 0.0], [h, b]]
+	else:
+		rings = [[0.0, 0.0], [h - b, 0.0], [h, b]]
+	var loops: Array = []
+	for r in rings:
+		var y: float = r[0]
+		var i: float = r[1]
+		loops.append([Vector3(-hw + i, y, -hd + i), Vector3(hw - i, y, -hd + i), Vector3(hw - i, y, hd - i), Vector3(-hw + i, y, hd - i)])
 	var centre := Vector3(0, h * 0.5, 0)
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	for i in 4:
-		var j := (i + 1) % 4
-		_quad(st, ring0[i], ring0[j], ring1[j], ring1[i], centre)
-		_quad(st, ring1[i], ring1[j], ring2[j], ring2[i], centre)
-	_quad(st, ring2[0], ring2[1], ring2[2], ring2[3], centre)
-	_quad(st, ring0[3], ring0[2], ring0[1], ring0[0], centre)
+	for k in loops.size() - 1:
+		var lo: Array = loops[k]
+		var hi: Array = loops[k + 1]
+		for i in 4:
+			var j := (i + 1) % 4
+			_quad(st, lo[i], lo[j], hi[j], hi[i], centre)
+	var top: Array = loops[loops.size() - 1]
+	var bot: Array = loops[0]
+	_quad(st, top[0], top[1], top[2], top[3], centre)
+	_quad(st, bot[3], bot[2], bot[1], bot[0], centre)
 	return st.commit()
 
 

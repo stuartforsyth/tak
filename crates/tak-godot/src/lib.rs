@@ -86,6 +86,25 @@ impl TakGame {
         self.pending = Some(rx);
     }
 
+    /// Abandons a running search; its result is discarded.
+    #[func]
+    fn cancel_ai(&mut self) {
+        self.pending = None;
+    }
+
+    /// Takes back the last move. Cancels any running search first.
+    #[func]
+    fn undo(&mut self) -> bool {
+        self.pending = None;
+        self.game.undo()
+    }
+
+    /// Number of moves played so far.
+    #[func]
+    fn plies(&self) -> i64 {
+        self.game.plies() as i64
+    }
+
     #[func]
     fn is_thinking(&self) -> bool {
         self.pending.is_some()

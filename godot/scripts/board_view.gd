@@ -5,18 +5,20 @@ const MeshLib = preload("res://scripts/mesh_lib.gd")
 const Wood = preload("res://scripts/wood.gd")
 
 const BOARD_TOP := 0.25
-const FLAT_H := 0.13
-const STONE := 0.74
-const WALL_H := 0.62
-const WALL_T := 0.17
-const CAP_R := 0.29
-const CAP_H := 0.68
+const FLAT_H := 0.2
+const STONE := 0.62
+const WALL_H := STONE      # a wall is a flat stone turned on its edge
+const WALL_T := FLAT_H
+const CAP_R := 0.24
+const CAP_H := 0.7
+const LIFT := 0.22
 const BAR := 0.5
 
 var size := 5
 var _pieces: Node3D
 var _marks: Node3D
 var _prev := {}
+var _nodes := {}   # square -> Array of piece nodes, bottom to top
 var _flat_mesh: ArrayMesh
 var _wall_mesh: ArrayMesh
 var _cap_mesh: ArrayMesh
@@ -31,9 +33,10 @@ func setup(board_size: int) -> void:
 	for c in get_children():
 		c.queue_free()
 	_prev = {}
-	_flat_mesh = MeshLib.bevel_box(STONE, FLAT_H, STONE, 0.035)
-	_wall_mesh = MeshLib.bevel_box(STONE, WALL_H, WALL_T, 0.035)
-	_cap_mesh = MeshLib.capstone(CAP_R, CAP_H, 0.26)
+	_nodes = {}
+	_flat_mesh = MeshLib.bevel_box(STONE, FLAT_H, STONE, 0.04, true)
+	_wall_mesh = MeshLib.bevel_box(STONE, WALL_H, WALL_T, 0.04, true)
+	_cap_mesh = MeshLib.capstone(CAP_R, CAP_H, 0.22)
 	_white = Wood.make(Color(0.90, 0.80, 0.63), Color(0.74, 0.61, 0.44), 11, 0.38, 0.9, 5)
 	_black = Wood.make(Color(0.27, 0.16, 0.11), Color(0.11, 0.065, 0.045), 23, 0.36, 0.9, 5)
 	_build_board()
@@ -176,6 +179,7 @@ static func parse_tps(tps: String, n: int) -> Dictionary:
 func show_position(stacks: Dictionary, animate: bool) -> void:
 	for c in _pieces.get_children():
 		c.queue_free()
+	_nodes = {}
 	for sq in stacks:
 		var changed: bool = animate and _prev.get(sq, "") != stacks[sq]
 		_pieces.add_child(_build_stack(sq, stacks[sq], changed))
@@ -191,6 +195,8 @@ func _build_stack(sq: String, s: String, animate: bool) -> Node3D:
 		s = s.substr(0, s.length() - 1)
 	var y := 0.0
 	var seed_base := hash(sq)
+	var top_y := 0.0
+	var nodes: Array = []
 	for i in s.length():
 		var white := s[i] == "1"
 		var top := i == s.length() - 1
@@ -213,13 +219,66 @@ func _build_stack(sq: String, s: String, animate: bool) -> Node3D:
 			piece.rotation_degrees = Vector3(0, yaw, 0)
 		piece.position = jitter + Vector3(0, y, 0)
 		root.add_child(piece)
+		nodes.append(piece)
+		top_y = y + h
 		if animate:
 			var final_y := y
 			piece.position.y = final_y + 0.9
 			var tw := create_tween()
 			tw.tween_property(piece, "position:y", final_y, 0.3).set_delay(0.05 * i).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 		y += h if not (top and mod != "") else 0.0
+	_nodes[sq] = nodes
+	if nodes.size() >= 2:
+		_add_count(root, nodes.size(), top_y, mod, s.ends_with("1"), animate)
 	return root
+
+
+## The stack height, written on the top face so it can never drift from its stack. A wall or
+## capstone has no flat top, so those get a small billboard just above the piece instead.
+func _add_count(root: Node3D, count: int, top_y: float, mod: String, top_white: bool, animate: bool) -> void:
+	var l := Label3D.new()
+	l.text = str(count)
+	l.shaded = false
+	l.font_size = 96
+	l.outline_size = 22
+	var ink := Color(0.16, 0.08, 0.04)
+	var halo := Color(0.95, 0.85, 0.65)
+	if mod == "":
+		l.pixel_size = 0.0058
+		l.rotation_degrees = Vector3(-90, 0, 0)
+		l.position = Vector3(0, top_y + 0.004, 0.02)
+		if top_white:
+			l.modulate = ink
+			l.outline_modulate = halo
+		else:
+			l.modulate = halo
+			l.outline_modulate = ink
+	else:
+		l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		l.no_depth_test = true
+		l.pixel_size = 0.0032
+		l.position = Vector3(0, top_y + 0.2, 0)
+		l.modulate = halo
+		l.outline_modulate = Color(0.06, 0.03, 0.02)
+	root.add_child(l)
+	if animate:
+		l.modulate.a = 0.0
+		create_tween().tween_property(l, "modulate:a", 1.0, 0.25).set_delay(0.3)
+
+
+## Lift the top `n` stones of a stack so the player sees how many are in hand.
+func set_lift(sq: String, n: int) -> void:
+	for key in _nodes:
+		var nodes: Array = _nodes[key]
+		for i in nodes.size():
+			var lifted: bool = key == sq and i >= nodes.size() - n
+			var node: Node3D = nodes[i]
+			var base := node.get_meta("base_y", node.position.y) as float
+			if not node.has_meta("base_y"):
+				node.set_meta("base_y", base)
+			var want := base + (LIFT if lifted else 0.0)
+			if absf(node.position.y - want) > 0.001:
+				create_tween().tween_property(node, "position:y", want, 0.12).set_ease(Tween.EASE_OUT)
 
 
 # ---- highlights --------------------------------------------------------------

@@ -28,6 +28,7 @@ var _move_re := RegEx.create_from_string("^(\\d?)([a-h][1-8])([+\\-<>])(\\d*)$")
 var status: Label
 var banner: Label
 var kind_buttons := {}
+var undo_btn: Button
 var carry_label: Label
 var size_opt: OptionButton
 var level_opt: OptionButton
@@ -115,7 +116,7 @@ func _build_scene() -> void:
 
 
 func _frame_camera() -> void:
-	cam_offset = Vector3(0, size * 1.05 + 3.0, size * 0.82 + 2.6)
+	cam_offset = Vector3(0, size * 0.9 + 2.4, size * 1.0 + 3.2)
 	camera.attributes = CameraAttributesPractical.new()
 	_fit_camera()
 
@@ -200,6 +201,11 @@ func _build_hud() -> void:
 		row.add_child(b)
 		kind_buttons[k] = b
 	kind_buttons["F"].button_pressed = true
+	undo_btn = Button.new()
+	undo_btn.text = "Undo (U)"
+	undo_btn.custom_minimum_size = Vector2(110, 40)
+	undo_btn.pressed.connect(_undo)
+	row.add_child(undo_btn)
 	bv.add_child(row)
 	carry_label = Label.new()
 	carry_label.add_theme_color_override("font_color", Color(0.8, 0.7, 0.55))
@@ -274,10 +280,11 @@ func _refresh(animate: bool) -> void:
 
 func _update_hud() -> void:
 	var out := game.outcome()
+	banner.visible = out != 0
+	undo_btn.disabled = not _can_undo()
 	if out != 0:
 		var who := "Draw" if out == 3 else ("White wins" if out == 1 else "Black wins")
 		banner.text = who + "!"
-		banner.visible = true
 		status.text = "Game over"
 	elif thinking:
 		status.text = "Engine is thinking..."
@@ -375,6 +382,10 @@ func _unhandled_input(ev: InputEvent) -> void:
 			KEY_S: _select_kind("S")
 			KEY_C: _select_kind("C")
 			KEY_ESCAPE: _cancel()
+			KEY_U: _undo()
+			KEY_Z:
+				if ev.ctrl_pressed:
+					_undo()
 			_:
 				if ev.keycode >= KEY_1 and ev.keycode <= KEY_8 and not sel.is_empty() and sel["dir"] == "":
 					_set_carry(ev.keycode - KEY_0)
@@ -433,6 +444,28 @@ func _play_human(ptn: String) -> void:
 	_refresh(true)
 	if game.outcome() == 0:
 		_start_ai()
+
+
+# ---- undo --------------------------------------------------------------------
+
+## Undo needs at least one move of the human's to take back.
+func _can_undo() -> bool:
+	return game.plies() >= (1 if human_white else 2)
+
+
+## Takes back the human's last move and the engine's reply, so it is the human's turn again.
+## While the engine is thinking, its search is abandoned and only the human's move goes.
+func _undo() -> void:
+	if not sel.is_empty():
+		_cancel()
+		return
+	if not _can_undo():
+		return
+	thinking = false
+	game.undo()
+	if not human_turn() and _can_undo():
+		game.undo()
+	_refresh(false)
 
 
 # ---- stack movement ----------------------------------------------------------
@@ -554,6 +587,10 @@ func _sum(a: Array) -> int:
 
 func _update_marks() -> void:
 	view.set_marks(_next_targets(), sel["src"] if not sel.is_empty() else "")
+	if sel.is_empty():
+		view.set_lift("", 0)
+	else:
+		view.set_lift(sel["src"], _remaining() if sel["dir"] != "" else sel["n"])
 
 
 func _move_click(sq: String) -> void:
@@ -589,12 +626,20 @@ func _run_demo(args: PackedStringArray) -> void:
 	for a in args:
 		if a.begins_with("--plies="):
 			plies = int(a.substr(8))
-	for i in plies:
-		if game.outcome() != 0:
-			break
-		var r := game.ai_move(0)
-		game.play(r["move"])
-	_refresh(false)
+	if "--stackdemo" in args:
+		for m in ["d4", "a4", "a1", "d3", "b1", "c4", "a1>", "c3", "a1", "c2", "a1>", "d2"]:
+			game.play(m)
+		_refresh(false)
+		if not "--nosel" in args:
+			_click("b1")
+			_set_carry(2)
+	else:
+		for i in plies:
+			if game.outcome() != 0:
+				break
+			var r := game.ai_move(0)
+			game.play(r["move"])
+		_refresh(false)
 	await get_tree().create_timer(1.2).timeout
 	await RenderingServer.frame_post_draw
 	get_viewport().get_texture().get_image().save_png(demo_shot)
@@ -624,6 +669,22 @@ func _run_selftest() -> void:
 	_click("c3")                       # own flat
 	await _wait_ai()
 	print("own flat placed: ", stacks.get("c3", "") == "1", " pieces=", _count_pieces())
+	_undo()
+	print("undo: pieces=", _count_pieces(), " (expect 2), human to move: ", human_turn(), ", c3 empty: ", not stacks.has("c3"))
+	_click("c3")
+	await _wait_ai()
+	# Undo while the engine is thinking: only the human's move is taken back.
+	var empty := ""
+	for sq in view.get_all_squares():
+		if not stacks.has(sq):
+			empty = sq
+			break
+	_click(empty)
+	print("placed on ", empty, "; thinking: ", thinking, " (expect true)")
+	_undo()
+	print("undo mid-search: thinking=", thinking, " pieces=", _count_pieces(), " (expect 4), human to move: ", human_turn())
+	await get_tree().create_timer(0.8).timeout
+	print("no stale engine move applied: pieces=", _count_pieces(), " (expect 4)")
 	_click("c3")
 	var targets := _next_targets()
 	print("move targets from c3: ", targets)

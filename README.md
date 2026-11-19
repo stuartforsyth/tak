@@ -26,6 +26,12 @@ fan project and is not affiliated with or endorsed by them or Cheapass Games.
 ## Build and run
 
 ```
+./run.sh                           # play (builds the Rust bridge first if needed)
+```
+
+Or step by step:
+
+```
 ./build.sh                         # builds the Rust bridge, copies it to godot/bin/
 godot --path godot                 # play
 ```
@@ -47,6 +53,7 @@ cargo run --release -p tak-cli -- 5 medium     # size 4|5|6, level easy|medium|h
 | Drop more stones on the same square | Click that square again |
 | Continue to the next square | Click the next square along the line |
 | Cancel a move | Right-click or `Esc` |
+| Undo | `U`, `Ctrl+Z` or the Undo button. Takes back your last move and the engine's reply; if the engine is still thinking, its search is cancelled |
 
 Green rings show the squares you can click next. A gold ring marks the selected stack. On the
 first move of the game each player places a flat stone of the *opponent's* colour; this is the

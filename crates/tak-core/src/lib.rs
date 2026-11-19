@@ -48,6 +48,8 @@ impl Level {
 #[derive(Clone)]
 pub struct Game<const S: usize> {
     position: Position<S>,
+    /// Positions before each move played, so undo is exact.
+    history: Vec<Position<S>>,
 }
 
 impl<const S: usize> Game<S> {
@@ -57,6 +59,7 @@ impl<const S: usize> Game<S> {
         let komi = Komi::from_half_komi(half_komi).expect("komi in range");
         Game {
             position: Position::start_position_with_komi(komi),
+            history: vec![],
         }
     }
 
@@ -80,8 +83,25 @@ impl<const S: usize> Game<S> {
         if !legal.contains(&mv) {
             return Err(format!("illegal move {ptn:?}"));
         }
+        self.history.push(self.position.clone());
         self.position.do_move(mv);
         Ok(())
+    }
+
+    /// Takes back the last move. Returns false at the start of the game.
+    pub fn undo(&mut self) -> bool {
+        match self.history.pop() {
+            Some(p) => {
+                self.position = p;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Number of moves (plies) played so far.
+    pub fn plies(&self) -> usize {
+        self.history.len()
     }
 
     pub fn outcome(&self) -> Option<Outcome> {
@@ -218,6 +238,12 @@ impl AnyGame {
     pub fn outcome(&self) -> Option<Outcome> {
         each!(self, g => g.outcome())
     }
+    pub fn undo(&mut self) -> bool {
+        each!(self, g => g.undo())
+    }
+    pub fn plies(&self) -> usize {
+        each!(self, g => g.plies())
+    }
     pub fn ai_move(&self, level: Level) -> (String, f32) {
         each!(self, g => g.ai_move(level))
     }
@@ -229,6 +255,31 @@ impl AnyGame {
 #[cfg(test)]
 mod any_tests {
     use super::*;
+
+    #[test]
+    fn undo_restores_position_exactly() {
+        let mut g = AnyGame::new(5).unwrap();
+        assert!(!g.undo());
+        let start = g.tps();
+        g.play("a1").unwrap();
+        g.play("e5").unwrap();
+        g.play("c3").unwrap();
+        let after_two = {
+            let mut h = AnyGame::new(5).unwrap();
+            h.play("a1").unwrap();
+            h.play("e5").unwrap();
+            h.tps()
+        };
+        assert_eq!(g.plies(), 3);
+        assert!(g.undo());
+        assert_eq!(g.tps(), after_two);
+        assert!(g.undo() && g.undo());
+        assert_eq!(g.tps(), start);
+        assert_eq!(g.plies(), 0);
+        assert!(!g.undo());
+        // Replaying after undo works.
+        g.play("b2").unwrap();
+    }
 
     #[test]
     fn any_game_dispatches_by_size() {
