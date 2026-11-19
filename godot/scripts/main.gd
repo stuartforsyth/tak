@@ -30,6 +30,7 @@ var banner: Label
 var kind_buttons := {}
 var undo_btn: Button
 var carry_label: Label
+var hand_label: Label
 var size_opt: OptionButton
 var level_opt: OptionButton
 var side_opt: OptionButton
@@ -169,7 +170,16 @@ func _build_hud() -> void:
 	status = Label.new()
 	status.add_theme_font_size_override("font_size", 22)
 	status.add_theme_color_override("font_color", Color(0.95, 0.85, 0.65))
-	sp.add_child(status)
+	var sv := VBoxContainer.new()
+	sv.add_child(status)
+	hand_label = Label.new()
+	hand_label.add_theme_font_size_override("font_size", 34)
+	hand_label.add_theme_color_override("font_color", Color(1.0, 0.82, 0.35))
+	hand_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	hand_label.add_theme_constant_override("outline_size", 8)
+	hand_label.visible = false
+	sv.add_child(hand_label)
+	sp.add_child(sv)
 	ui.add_child(sp)
 
 	# Top-right: new game controls.
@@ -179,6 +189,12 @@ func _build_hud() -> void:
 	size_opt = _option(cv, "Board", ["4x4", "5x5", "6x6"], size - 4)
 	level_opt = _option(cv, "Engine", LEVEL_NAMES, level)
 	side_opt = _option(cv, "You play", ["White (first)", "Black"], 0)
+	var cb := CheckBox.new()
+	cb.text = "Coordinates"
+	cb.button_pressed = true
+	cb.focus_mode = Control.FOCUS_NONE
+	cb.toggled.connect(func(on: bool) -> void: view.set_coords(on))
+	cv.add_child(cb)
 	var nb := Button.new()
 	nb.text = "New game"
 	nb.pressed.connect(_on_new_pressed)
@@ -274,6 +290,7 @@ func _refresh(animate: bool, ptn: String = "") -> void:
 	stacks = BoardView.parse_tps(game.tps(), size)
 	legal = game.legal_moves()
 	view.show_position(stacks, animate, ptn)
+	view.show_road(_winning_road(), animate)
 	_update_marks()
 	_update_hud()
 
@@ -306,21 +323,68 @@ func _update_hud() -> void:
 			caps_used += 1
 	var caps_total: int = CAPS[size]
 	var stones_left: int = STONES[size] - (used - caps_used)
-	kind_buttons["F"].text = "Flat   x%d" % stones_left
-	kind_buttons["S"].text = "Wall   x%d" % stones_left
-	kind_buttons["C"].text = "Cap   x%d" % (caps_total - caps_used)
+	kind_buttons["F"].text = "Stone (S)  x%d" % stones_left
+	kind_buttons["S"].text = "Wall (W)  x%d" % stones_left
+	kind_buttons["C"].text = "Cap (C)  x%d" % (caps_total - caps_used)
 	kind_buttons["C"].visible = caps_total > 0
 	kind_buttons["S"].visible = not _opening()
 	kind_buttons["C"].visible = caps_total > 0 and not _opening()
 	if _opening():
 		piece_kind = "F"
 		kind_buttons["F"].button_pressed = true
+	hand_label.visible = not sel.is_empty()
 	if sel.is_empty():
-		carry_label.text = "F / S / C choose a piece. Click a stack of yours to move it."
+		carry_label.text = "S stone, W wall, C cap. Click a stack of yours to move it."
 	elif sel["dir"] == "":
-		carry_label.text = "Carrying %d (keys 1-%d or wheel). Click a neighbouring square. Right-click cancels." % [sel["n"], _max_carry(sel["src"])]
+		hand_label.text = "Pick up %d" % sel["n"]
+		carry_label.text = "Wheel (or keys 1-%d) sets how many to pick up. Click a neighbouring square. Right-click cancels." % _max_carry(sel["src"])
 	else:
-		carry_label.text = "%d left to drop. Same square drops more, next square moves on." % _remaining()
+		var here: int = sel["drops"][-1]
+		var sq := _offset(sel["src"], sel["dir"], sel["drops"].size())
+		hand_label.text = "Drop %d on %s" % [here, sq] + ("" if _remaining() == 0 else "  (%d left in hand)" % _remaining())
+		if _remaining() == 0:
+			carry_label.text = "Wheel changes how many to drop here. Click %s to finish." % sq
+		else:
+			carry_label.text = "Wheel changes how many to drop here. Click the next square to move on, or this one for one more."
+
+
+## Shortest chain of the winner's road pieces (flats and capstones) joining opposite edges.
+## Empty unless the game ended on a road.
+func _winning_road() -> Array:
+	var out := game.outcome()
+	if out != 1 and out != 2:
+		return []
+	var who := str(out)
+	var mine := {}
+	for sq in stacks:
+		var st: String = stacks[sq]
+		if not st.ends_with("S") and _top_owner(st) == who:
+			mine[sq] = true
+	for axis in 2:
+		var prev := {}
+		var queue := []
+		for i in size:
+			var sq: String = view.square_name(0, i + 1) if axis == 0 else view.square_name(i, 1)
+			if mine.has(sq):
+				prev[sq] = ""
+				queue.append(sq)
+		var head := 0
+		while head < queue.size():
+			var cur: String = queue[head]
+			head += 1
+			var at_end: bool = (cur.unicode_at(0) - 97 == size - 1) if axis == 0 else (int(cur.substr(1)) == size)
+			if at_end:
+				var path := []
+				while cur != "":
+					path.append(cur)
+					cur = prev[cur]
+				return path
+			for dir in DIRS:
+				var nb := _offset(cur, dir, 1)
+				if nb != "" and mine.has(nb) and not prev.has(nb):
+					prev[nb] = cur
+					queue.append(nb)
+	return []
 
 
 func _opening() -> bool:
@@ -378,8 +442,8 @@ func _unhandled_input(ev: InputEvent) -> void:
 			_adjust_carry(-1)
 	elif ev is InputEventKey and ev.pressed and not ev.echo:
 		match ev.keycode:
-			KEY_F: _select_kind("F")
-			KEY_S: _select_kind("S")
+			KEY_S: _select_kind("F")
+			KEY_W: _select_kind("S")
 			KEY_C: _select_kind("C")
 			KEY_ESCAPE: _cancel()
 			KEY_U: _undo()
@@ -433,6 +497,7 @@ func _place(sq: String) -> void:
 	var ptn := sq if piece_kind == "F" else piece_kind + sq
 	if ptn in legal:
 		_play_human(ptn)
+		_select_kind("F")
 
 
 func _play_human(ptn: String) -> void:
@@ -490,8 +555,27 @@ func _cancel() -> void:
 
 
 func _adjust_carry(delta: int) -> void:
-	if not sel.is_empty() and sel["dir"] == "":
+	if sel.is_empty():
+		return
+	if sel["dir"] == "":
 		_set_carry(sel["n"] + delta)
+	else:
+		_adjust_drop(delta)
+
+
+## While dealing, the wheel changes how many stones go on the current square.
+func _adjust_drop(delta: int) -> void:
+	var drops: Array = sel["drops"]
+	var cur: int = drops[-1]
+	var want := clampi(cur + delta, 1, cur + _remaining())
+	if want == cur:
+		return
+	var trial := drops.duplicate()
+	trial[-1] = want
+	if _ok(sel["n"], sel["src"], sel["dir"], trial):
+		drops[-1] = want
+		_update_marks()
+		_update_hud()
 
 
 func _set_carry(n: int) -> void:
@@ -563,7 +647,9 @@ func _next_targets() -> Array:
 			var sq := _offset(src, dir, 1)
 			if sq != "" and _ok(n, src, dir, [1]):
 				out.append(sq)
-	elif _remaining() > 0:
+	elif _remaining() == 0:
+		out.append(_offset(src, sel["dir"], sel["drops"].size()))   # click it to finish
+	else:
 		var dir: String = sel["dir"]
 		var drops: Array = sel["drops"]
 		var same := drops.duplicate()
@@ -601,6 +687,9 @@ func _move_click(sq: String) -> void:
 	if not sq in _next_targets():
 		return
 	var n: int = sel["n"]
+	if sel["dir"] != "" and _remaining() == 0:
+		_play_human(_ptn_for(n, src, sel["dir"], sel["drops"], true))
+		return
 	if sel["dir"] == "":
 		for dir in DIRS:
 			if _offset(src, dir, 1) == sq:
@@ -720,5 +809,22 @@ func _run_selftest() -> void:
 	print("after d1: ", sel, " targets ", _next_targets())
 	_click("d1")
 	print("result: b1=", stacks.get("b1", "-"), " c1=", stacks.get("c1", "-"), " d1=", stacks.get("d1", "-"), " (expect - 1 11)")
+	await _wait_ai()
+
+	# Wheel-driven deal: carry 2 of 3, drop both on c1, then click c1 to finish.
+	_new_game()
+	for m in ["d4", "a4", "a1", "d3", "b1", "c4", "a1>", "c3", "a1", "c2", "a1>", "d2"]:
+		game.play(m)
+	_refresh(false)
+	_click("b1")
+	_adjust_carry(-1)
+	print("wheel carry: n=", sel.get("n"), " (expect 2), label: ", hand_label.text)
+	_click("c1")
+	_adjust_carry(1)
+	print("wheel drop: ", sel.get("drops"), " (expect [2]), label: ", hand_label.text, " targets ", _next_targets(), " (expect [c1])")
+	_adjust_carry(1)
+	print("wheel clamped: ", sel.get("drops"), " (expect [2])")
+	_click("c1")
+	print("result: b1=", stacks.get("b1", "-"), " c1=", stacks.get("c1", "-"), " (expect 1 11), sel empty: ", sel.is_empty())
 	await _wait_ai()
 	get_tree().quit()

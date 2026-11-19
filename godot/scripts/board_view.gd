@@ -17,6 +17,7 @@ const BAR := 0.5
 var size := 5
 var _pieces: Node3D
 var _marks: Node3D
+var _road: Node3D
 var _prev := {}
 var _nodes := {}   # square -> Array of piece nodes, bottom to top
 var _slides := {}  # square -> { from: Vector3 world, count: int, group: int } for the move being shown
@@ -28,6 +29,8 @@ var _white: StandardMaterial3D
 var _black: StandardMaterial3D
 var _hover: MeshInstance3D
 var _mark_mat: StandardMaterial3D
+var coords_visible := true
+var _coord_labels: Array[Label3D] = []
 
 
 func setup(board_size: int) -> void:
@@ -36,6 +39,7 @@ func setup(board_size: int) -> void:
 		c.queue_free()
 	_prev = {}
 	_nodes = {}
+	_coord_labels = []
 	_flat_mesh = MeshLib.bevel_box(STONE, FLAT_H, STONE, 0.04, true)
 	_wall_mesh = MeshLib.bevel_box(STONE, WALL_H, WALL_T, 0.04, true)
 	_cap_mesh = MeshLib.capstone(CAP_R, CAP_H, 0.22)
@@ -46,6 +50,8 @@ func setup(board_size: int) -> void:
 	add_child(_pieces)
 	_marks = Node3D.new()
 	add_child(_marks)
+	_road = Node3D.new()
+	add_child(_road)
 	_make_hover()
 
 
@@ -100,7 +106,15 @@ func _label(text: String, pos: Vector3) -> void:
 	l.outline_size = 0
 	l.rotation_degrees = Vector3(-90, 0, 0)
 	l.position = pos
+	l.visible = coords_visible
+	_coord_labels.append(l)
 	add_child(l)
+
+
+func set_coords(on: bool) -> void:
+	coords_visible = on
+	for l in _coord_labels:
+		l.visible = on
 
 
 func _make_hover() -> void:
@@ -350,6 +364,40 @@ func set_marks(targets: Array, selected: String) -> void:
 		gold.albedo_color = Color(1.0, 0.8, 0.3)
 		gold.emission = Color(1.0, 0.75, 0.25)
 		_ring(selected, gold, 0.42)
+
+
+## Glow under the squares of a winning road; an empty list clears it. After a move it waits
+## for the stones to land, then pulses gently.
+func show_road(squares: Array, animate: bool) -> void:
+	for c in _road.get_children():
+		c.queue_free()
+	if squares.is_empty():
+		return
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.albedo_color = Color(1.0, 0.8, 0.3, 0.0 if animate else 0.55)
+	m.emission_enabled = true
+	m.emission = Color(1.0, 0.75, 0.25)
+	m.emission_energy_multiplier = 1.4
+	var q := PlaneMesh.new()
+	q.size = Vector2(0.95, 0.95)
+	for sq in squares:
+		var mi := MeshInstance3D.new()
+		mi.mesh = q
+		mi.material_override = m
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var p := square_pos(sq)
+		mi.position = Vector3(p.x, BOARD_TOP + 0.006, p.z)
+		_road.add_child(mi)
+	var tw := _road.get_child(0).create_tween()
+	if animate:
+		tw.tween_interval(0.9)
+	tw.tween_property(m, "albedo_color:a", 0.55, 0.4)
+	var pulse := _road.get_child(0).create_tween().set_loops()
+	pulse.tween_interval(1.4 if animate else 0.4)
+	pulse.tween_property(m, "emission_energy_multiplier", 2.4, 0.9).set_trans(Tween.TRANS_SINE)
+	pulse.tween_property(m, "emission_energy_multiplier", 1.0, 0.9).set_trans(Tween.TRANS_SINE)
 
 
 func _ring(sq: String, mat: Material, radius: float) -> void:

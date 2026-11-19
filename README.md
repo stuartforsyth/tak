@@ -13,6 +13,9 @@ fan project and is not affiliated with or endorsed by them or Cheapass Games.
   stack movement, road wins and flat wins.
 - Computer opponent (Tiltak) at three strengths: Easy, Medium and Hard.
 - Play as white or black.
+- Stack moves slide stone by stone from the source square, and a winning road glows gold.
+- "Pick up N" and "Drop N" labels show what is in your hand; the mouse wheel sets both counts.
+- A checkbox hides the board coordinates.
 - Procedurally generated wood board and stones, with shadows, ambient occlusion and glow.
   There are no art assets to download.
 - A terminal version for quick games and testing.
@@ -47,11 +50,12 @@ cargo run --release -p tak-cli -- 5 medium     # size 4|5|6, level easy|medium|h
 | Action | How |
 |---|---|
 | Place a stone | Click an empty square |
-| Choose flat / wall / capstone | `F`, `S`, `C` or the buttons at the bottom |
+| Choose stone (flat) / wall / capstone | `S`, `W`, `C` or the buttons at the bottom. The choice goes back to flat after each placement |
 | Move a stack | Click a stack of yours, then click where it goes |
-| Choose how many stones to carry | Keys `1`-`6` or the mouse wheel, before the first drop |
-| Drop more stones on the same square | Click that square again |
-| Continue to the next square | Click the next square along the line |
+| Choose how many stones to pick up | Mouse wheel (or keys `1`-`6`) after clicking the stack. The top-left shows "Pick up N" |
+| Choose how many to drop on a square | Mouse wheel after clicking the square. The top-left shows "Drop N on c1". Click that square again to finish once nothing is left in hand |
+| Drop one more on the same square | Click that square again |
+| Continue to the next square | Click the next square along the line. The move plays when the hand is empty |
 | Cancel a move | Right-click or `Esc` |
 | Undo | `U`, `Ctrl+Z` or the Undo button. Takes back your last move and the engine's reply; if the engine is still thinking, its search is cancelled |
 
@@ -67,6 +71,7 @@ standard Tak opening, and the status line reminds you.
 | `crates/tak-godot` | GDExtension that exposes a `TakGame` class to Godot. The engine search runs on a Rust thread and is polled from Godot. |
 | `crates/tak-cli` | Terminal game. |
 | `godot/` | The Godot project: scene, procedural meshes and wood materials, input and HUD. |
+| `docs/` | Design notes, e.g. `stack-move-ux.md` (the planned "lift and deal" stack-move preview). |
 | `LICENSE` | GNU General Public License, version 3. |
 
 ## Tests
@@ -78,7 +83,8 @@ godot --path godot -- --shot=/tmp/x.png --size=6 --plies=30    # screenshot of a
 ```
 
 The self-test checks that screen picking maps to the right square on every square, then plays real
-clicks: placing a stone, moving one stone, and moving a three-stone stack across two squares.
+clicks: placing a stone, moving one stone, moving a three-stone stack across two squares, and a
+wheel-driven move that picks up two stones and drops both on one square.
 
 ## Difficulty levels
 
@@ -92,7 +98,6 @@ These node counts are first guesses. Strength has not been measured yet.
 
 ## Roadmap
 
-- Animate moves sliding from the source square, and glow the winning road.
 - Calibrate the levels by playing them against each other.
 - Menus, settings and sound.
 - Phase 2, online play: either a lobby with ratings and matchmaking, or a PlayTak client. Not
