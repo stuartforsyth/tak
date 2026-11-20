@@ -332,7 +332,7 @@ func _refresh(animate: bool, ptn: String = "") -> void:
 	legal = game.legal_moves()
 	view.show_position(stacks, animate, ptn)
 	view.show_road(_winning_road(), animate)
-	_update_marks()
+	_update_preview()
 	_update_hud()
 
 
@@ -378,15 +378,16 @@ func _update_hud() -> void:
 		carry_label.text = "S stone, W wall, C cap. Click a stack of yours to move it."
 	elif sel["dir"] == "":
 		hand_label.text = "Pick up %d" % sel["n"]
-		carry_label.text = "Wheel (or keys 1-%d) sets how many to pick up. Click a neighbouring square. Right-click cancels." % _max_carry(sel["src"])
+		carry_label.text = "Wheel or 1-%d sets the count. Click a green square to drop one stone there. Right-click or Esc cancels." % _max_carry(sel["src"])
 	else:
 		var here: int = sel["drops"][-1]
 		var sq := _offset(sel["src"], sel["dir"], sel["drops"].size())
-		hand_label.text = "Drop %d on %s" % [here, sq] + ("" if _remaining() == 0 else "  (%d left in hand)" % _remaining())
 		if _remaining() == 0:
-			carry_label.text = "Wheel changes how many to drop here. Click %s to finish." % sq
+			hand_label.text = "Hand empty: click %s to play" % sq
+			carry_label.text = "Wheel down or right-click takes one back; Esc cancels."
 		else:
-			carry_label.text = "Wheel changes how many to drop here. Click the next square to move on, or this one for one more."
+			hand_label.text = "Drop %d on %s  (%d in hand)" % [here, sq, _remaining()]
+			carry_label.text = "Wheel or 1-8 sets how many go here. Click here for one more, or the next square to move on. Right-click takes one back; Esc cancels."
 
 
 ## Shortest chain of the winner's road pieces (flats and capstones) joining opposite edges.
@@ -476,7 +477,7 @@ func _unhandled_input(ev: InputEvent) -> void:
 			if sq != "":
 				_click(sq)
 		elif ev.button_index == MOUSE_BUTTON_RIGHT:
-			_cancel()
+			_step_back()
 		elif ev.button_index == MOUSE_BUTTON_WHEEL_UP:
 			_adjust_carry(1)
 		elif ev.button_index == MOUSE_BUTTON_WHEEL_DOWN:
@@ -487,6 +488,7 @@ func _unhandled_input(ev: InputEvent) -> void:
 			KEY_W: _select_kind("S")
 			KEY_C: _select_kind("C")
 			KEY_ESCAPE: _cancel()
+			KEY_BACKSPACE: _step_back()
 			KEY_U: _undo()
 			KEY_Q: _orbit(-ORBIT_STEP)
 			KEY_E: _orbit(ORBIT_STEP)
@@ -495,8 +497,11 @@ func _unhandled_input(ev: InputEvent) -> void:
 				if ev.ctrl_pressed:
 					_undo()
 			_:
-				if ev.keycode >= KEY_1 and ev.keycode <= KEY_8 and not sel.is_empty() and sel["dir"] == "":
-					_set_carry(ev.keycode - KEY_0)
+				if ev.keycode >= KEY_1 and ev.keycode <= KEY_8 and not sel.is_empty():
+					if sel["dir"] == "":
+						_set_carry(ev.keycode - KEY_0)
+					else:
+						_set_drop(ev.keycode - KEY_0)
 
 
 func _select_kind(k: String) -> void:
@@ -511,12 +516,7 @@ func _can_act() -> bool:
 
 
 func _pick(pos: Vector2) -> String:
-	var o := camera.project_ray_origin(pos)
-	var d := camera.project_ray_normal(pos)
-	var hit = Plane(Vector3.UP, BoardView.BOARD_TOP).intersects_ray(o, d)
-	if hit == null:
-		return ""
-	return view.world_to_square(hit)
+	return view.pick(camera.project_ray_origin(pos), camera.project_ray_normal(pos))
 
 
 func _click(sq: String) -> void:
@@ -544,13 +544,14 @@ func _place(sq: String) -> void:
 		_select_kind("F")
 
 
-func _play_human(ptn: String) -> void:
+## `dealt`: stones were already shown landing, so the rebuilt board must not fly them in again.
+func _play_human(ptn: String, dealt := false) -> void:
 	var err := game.play(ptn)
 	if err != "":
 		push_warning(err)
 		return
 	sel = {}
-	_refresh(true, ptn)
+	_refresh(not dealt, ptn)
 	if game.outcome() == 0:
 		_start_ai()
 
@@ -586,15 +587,18 @@ func _max_carry(src: String) -> int:
 
 
 func _begin_move(src: String) -> void:
-	sel = {"src": src, "n": _max_carry(src), "dir": "", "drops": []}
-	_update_marks()
+	var ns := _legal_carries(src)
+	if ns.is_empty():
+		return
+	sel = {"src": src, "n": ns[0], "dir": "", "drops": []}
+	_update_preview()
 	_update_hud()
 
 
 func _cancel() -> void:
 	if not sel.is_empty():
 		sel = {}
-		_update_marks()
+		_update_preview()
 		_update_hud()
 
 
@@ -602,29 +606,57 @@ func _adjust_carry(delta: int) -> void:
 	if sel.is_empty():
 		return
 	if sel["dir"] == "":
-		_set_carry(sel["n"] + delta)
+		var ns := _legal_carries(sel["src"])
+		var n: int = sel["n"] + delta
+		while n >= 1 and n <= _max_carry(sel["src"]):
+			if n in ns:
+				_set_carry(n)
+				return
+			n += delta
 	else:
-		_adjust_drop(delta)
+		_set_drop(sel["drops"][-1] + delta)
 
 
 ## While dealing, the wheel changes how many stones go on the current square.
-func _adjust_drop(delta: int) -> void:
+func _set_drop(want: int) -> void:
+	if sel.is_empty() or sel["dir"] == "":
+		return
 	var drops: Array = sel["drops"]
 	var cur: int = drops[-1]
-	var want := clampi(cur + delta, 1, cur + _remaining())
+	want = clampi(want, 1, cur + _remaining())
 	if want == cur:
 		return
 	var trial := drops.duplicate()
 	trial[-1] = want
 	if _ok(sel["n"], sel["src"], sel["dir"], trial):
 		drops[-1] = want
-		_update_marks()
+		_update_preview()
 		_update_hud()
 
 
+## Right-click / Backspace: take one stone back. Walks back through the squares, then to the
+## pick-up step; with nothing dealt it cancels.
+func _step_back() -> void:
+	if sel.is_empty():
+		return
+	var drops: Array = sel["drops"]
+	if drops.is_empty():
+		_cancel()
+		return
+	drops[-1] -= 1
+	if drops[-1] == 0:
+		drops.pop_back()
+	if drops.is_empty():
+		sel["dir"] = ""
+	_update_preview()
+	_update_hud()
+
+
 func _set_carry(n: int) -> void:
-	sel["n"] = clampi(n, 1, _max_carry(sel["src"]))
-	_update_marks()
+	if not n in _legal_carries(sel["src"]):
+		return
+	sel["n"] = n
+	_update_preview()
 	_update_hud()
 
 
@@ -679,6 +711,26 @@ func _offset(src: String, dir: String, steps: int) -> String:
 	return char(97 + f) + str(r)
 
 
+## Squares a stack of `n` picked up from `src` may drop its first stone on.
+func _first_targets(src: String, n: int) -> Array:
+	var out := []
+	for dir in DIRS:
+		var sq := _offset(src, dir, 1)
+		if sq != "" and _ok(n, src, dir, [1]):
+			out.append(sq)
+	return out
+
+
+## Pick-up counts from the largest down that have somewhere to go (a capstone on walls may
+## only travel alone). Empty when the stack cannot move at all.
+func _legal_carries(src: String) -> Array:
+	var out := []
+	for n in range(_max_carry(src), 0, -1):
+		if not _first_targets(src, n).is_empty():
+			out.append(n)
+	return out
+
+
 ## Squares the next click may land on, given the current movement state.
 func _next_targets() -> Array:
 	var out := []
@@ -687,10 +739,7 @@ func _next_targets() -> Array:
 	var src: String = sel["src"]
 	var n: int = sel["n"]
 	if sel["dir"] == "":
-		for dir in DIRS:
-			var sq := _offset(src, dir, 1)
-			if sq != "" and _ok(n, src, dir, [1]):
-				out.append(sq)
+		out = _first_targets(src, n)
 	elif _remaining() == 0:
 		out.append(_offset(src, sel["dir"], sel["drops"].size()))   # click it to finish
 	else:
@@ -715,12 +764,12 @@ func _sum(a: Array) -> int:
 	return t
 
 
-func _update_marks() -> void:
+func _update_preview() -> void:
 	view.set_marks(_next_targets(), sel["src"] if not sel.is_empty() else "")
 	if sel.is_empty():
-		view.set_lift("", 0)
+		view.set_preview("", 0, "", [])
 	else:
-		view.set_lift(sel["src"], _remaining() if sel["dir"] != "" else sel["n"])
+		view.set_preview(sel["src"], sel["n"], sel["dir"], sel["drops"])
 
 
 func _move_click(sq: String) -> void:
@@ -731,8 +780,9 @@ func _move_click(sq: String) -> void:
 	if not sq in _next_targets():
 		return
 	var n: int = sel["n"]
-	if sel["dir"] != "" and _remaining() == 0:
-		_play_human(_ptn_for(n, src, sel["dir"], sel["drops"], true))
+	var was_dealing: bool = sel["dir"] != ""   # before this click changes sel
+	if was_dealing and _remaining() == 0:
+		_play_human(_ptn_for(n, src, sel["dir"], sel["drops"], true), true)
 		return
 	if sel["dir"] == "":
 		for dir in DIRS:
@@ -746,9 +796,9 @@ func _move_click(sq: String) -> void:
 		else:
 			drops.append(1)
 	if _remaining() == 0:
-		_play_human(_ptn_for(n, src, sel["dir"], sel["drops"], true))
+		_play_human(_ptn_for(n, src, sel["dir"], sel["drops"], true), was_dealing)
 	else:
-		_update_marks()
+		_update_preview()
 		_update_hud()
 
 
@@ -768,6 +818,13 @@ func _run_demo(args: PackedStringArray) -> void:
 		if "--slide" in args:
 			game.play("3b1>12")
 			_refresh(true, "3b1>12")
+		elif "--deal" in args:
+			_click("b1")
+			var dest := "c1"
+			for a in args:
+				if a.begins_with("--dealdir="):
+					dest = view._step("b1", a.substr(10), 1)
+			_click(dest)
 		elif not "--nosel" in args:
 			_click("b1")
 			_set_carry(2)
@@ -796,33 +853,42 @@ func _wait_ai() -> void:
 	await get_tree().process_frame
 
 
-func _run_selftest() -> void:
-	var fails := 0
+var _fails := 0
+
+
+func _check(ok: bool, what: String) -> void:
+	if ok:
+		print("ok: ", what)
+	else:
+		print("FAIL: ", what)
+		_fails += 1
+
+
+## Squares whose pick does not come back as themselves when projected from the camera.
+func _pick_misses() -> int:
+	var misses := 0
 	for sq in view.get_all_squares():
-		var got := _pick(camera.unproject_position(view.square_pos(sq)))
-		if got != sq:
-			print("FAIL pick ", sq, " -> ", got)
-			fails += 1
-	print("pick round-trip: ", "ok" if fails == 0 else "FAILED")
+		if _pick(camera.unproject_position(view.square_pos(sq))) != sq:
+			misses += 1
+	return misses
+
+
+func _run_selftest() -> void:
+	_check(_pick_misses() == 0, "pick round-trip")
 	for deg in [90.0, 45.0, 180.0]:
 		_orbit(deg, false)
-		var orbit_fails := 0
-		for sq in view.get_all_squares():
-			if _pick(camera.unproject_position(view.square_pos(sq))) != sq:
-				orbit_fails += 1
-		print("pick round-trip at yaw ", yaw_target, ": ", "ok" if orbit_fails == 0 else "FAILED")
+		_check(_pick_misses() == 0, "pick round-trip at yaw %s" % yaw_target)
 	_reset_orbit()
 	await get_tree().create_timer(0.6).timeout
-	print("reset: yaw=", snappedf(cam_yaw, 0.001), " (expect a multiple of 2pi)")
+	_check(absf(cam_yaw - roundf(cam_yaw / TAU) * TAU) < 0.01, "reset: yaw is a multiple of 2pi (%s)" % snappedf(cam_yaw, 0.001))
 	_click("a1")                       # opening: places a black stone
 	await _wait_ai()
-	var count_a := _count_pieces()
-	print("after opening: ", count_a, " pieces (expect 2)")
+	_check(_count_pieces() == 2, "after opening: 2 pieces")
 	_click("c3")                       # own flat
 	await _wait_ai()
-	print("own flat placed: ", stacks.get("c3", "") == "1", " pieces=", _count_pieces())
+	_check(stacks.get("c3", "") == "1", "own flat placed on c3")
 	_undo()
-	print("undo: pieces=", _count_pieces(), " (expect 2), human to move: ", human_turn(), ", c3 empty: ", not stacks.has("c3"))
+	_check(_count_pieces() == 2 and human_turn() and not stacks.has("c3"), "undo: 2 pieces, human to move, c3 empty")
 	_click("c3")
 	await _wait_ai()
 	# Undo while the engine is thinking: only the human's move is taken back.
@@ -832,11 +898,11 @@ func _run_selftest() -> void:
 			empty = sq
 			break
 	_click(empty)
-	print("placed on ", empty, "; thinking: ", thinking, " (expect true)")
+	_check(thinking, "placed on %s; engine thinking" % empty)
 	_undo()
-	print("undo mid-search: thinking=", thinking, " pieces=", _count_pieces(), " (expect 4), human to move: ", human_turn())
+	_check(not thinking and _count_pieces() == 4 and human_turn(), "undo mid-search: not thinking, 4 pieces, human to move")
 	await get_tree().create_timer(0.8).timeout
-	print("no stale engine move applied: pieces=", _count_pieces(), " (expect 4)")
+	_check(_count_pieces() == 4, "no stale engine move applied")
 	_click("c3")
 	var targets := _next_targets()
 	print("move targets from c3: ", targets)
@@ -845,42 +911,154 @@ func _run_selftest() -> void:
 		_click(dest)
 		print("moved c3 -> ", dest, ": c3=", stacks.get("c3", "-"), " ", dest, "=", stacks.get(dest, "-"))
 	await _wait_ai()
-	print("legal moves still generated: ", legal.size() > 0)
+	_check(legal.size() > 0, "legal moves still generated")
 
 	# Multi-drop stack move on 4x4: build a white stack of three on b1, then carry it east.
 	size = 4
 	human_white = true
 	_new_game()
-	for m in ["d4", "a4", "a1", "d3", "b1", "c4", "a1>", "c3", "a1", "c2", "a1>", "d2"]:
-		var err := game.play(m)
-		if err != "":
-			print("FAIL setup ", m, ": ", err)
-	_refresh(false)
-	print("stack on b1: ", stacks.get("b1", ""), " (expect 111)")
+	_play_setup(["d4", "a4", "a1", "d3", "b1", "c4", "a1>", "c3", "a1", "c2", "a1>", "d2"])
+	_check(stacks.get("b1", "") == "111", "stack on b1 is 111")
+
+	# Picking sees stack height: b1 (0.6 tall) must pick as b1 from every yaw.
+	var b1_top: Vector3 = view.square_pos("b1") + Vector3(0, 0.58, 0)
+	for k in 4:
+		_check(_pick(camera.unproject_position(b1_top)) == "b1", "b1 stack picks as b1 at yaw %s" % yaw_target)
+		_orbit(90.0, false)
+	_check(_pick(camera.unproject_position(view.square_pos("c2"))) == "c2", "c2 picks as c2 with stacks present")
+
 	_click("b1")
-	print("carry: ", sel.get("n"), " targets: ", _next_targets())
+	_check(sel.get("n") == 3, "carry defaults to 3, targets %s" % [_next_targets()])
+	_check(_pick(camera.unproject_position(view.square_pos("b1") + Vector3(0, 0.8, 0))) == "b1", "lifted hand picks as b1")
+	counts_box.button_pressed = true
 	_click("c1")
-	print("after c1: ", sel, " targets ", _next_targets())
+	_check(sel.get("drops") == [1], "after c1: drops [1]")
+	await get_tree().create_timer(0.2).timeout
+	var n_b1: Array = view._nodes["b1"]
+	var base: float = view.BOARD_TOP
+	var c1p: Vector3 = view.square_pos("c1")
+	var g0: Vector3 = (n_b1[0] as Node3D).global_position
+	_check(absf(g0.x - c1p.x) < 0.05 and absf(g0.z - c1p.z) < 0.05 and absf(g0.y - base) < 0.02, "dealt stone sits on c1 (%s)" % g0)
+	_check(absf((n_b1[1] as Node3D).global_position.y - (base + 0.2 + view.LIFT)) < 0.02 and absf((n_b1[2] as Node3D).global_position.y - (base + 0.4 + view.LIFT)) < 0.02, "hand of two floats above c1")
+	_check(absf(float(view._col_top["b1"])) < 0.01 and absf(float(view._col_top["c1"]) - (0.2 + view.LIFT + 0.4)) < 0.01, "column tops: b1 %s, c1 %s" % [view._col_top["b1"], view._col_top["c1"]])
+	_check(_pick(camera.unproject_position(c1p + Vector3(0, 0.7, 0))) == "c1", "hand over c1 picks as c1")
+	_check(not (view._badges["b1"] as Node3D).visible, "b1 badge hidden during preview")
 	_click("d1")
-	print("after d1: ", sel, " targets ", _next_targets())
+	_check(sel.get("drops") == [1, 1], "after d1: drops [1, 1]")
+	await get_tree().create_timer(0.2).timeout
+	var d1p: Vector3 = view.square_pos("d1")
+	var g1: Vector3 = (n_b1[1] as Node3D).global_position
+	var g2: Vector3 = (n_b1[2] as Node3D).global_position
+	_check(absf(g1.x - d1p.x) < 0.05 and absf(g1.y - base) < 0.02, "second stone rests on d1")
+	_check(absf(g2.x - d1p.x) < 0.05 and absf(g2.y - (base + 0.2 + view.LIFT)) < 0.02, "last stone hovers above d1")
 	_click("d1")
-	print("result: b1=", stacks.get("b1", "-"), " c1=", stacks.get("c1", "-"), " d1=", stacks.get("d1", "-"), " (expect - 1 11)")
+	_check(not stacks.has("b1") and stacks.get("c1", "-") == "1" and stacks.get("d1", "-") == "11", "result: b1 empty, c1=1, d1=11 (got %s %s)" % [stacks.get("c1", "-"), stacks.get("d1", "-")])
+	_check(sel.is_empty(), "sel empty after commit")
+	var all_home := true
+	for sq in view._nodes:
+		for node in view._nodes[sq]:
+			if not (node.position as Vector3).is_equal_approx(node.get_meta("home")):
+				all_home = false
+	_check(all_home, "after commit every stone is at its home (no fly-in)")
+	_check(view._col_top == view._base_top, "after commit _col_top == _base_top")
+	_check((view._badges["d1"] as Node3D).visible, "d1 badge visible after commit")
+	counts_box.button_pressed = false
 	await _wait_ai()
 
 	# Wheel-driven deal: carry 2 of 3, drop both on c1, then click c1 to finish.
 	_new_game()
-	for m in ["d4", "a4", "a1", "d3", "b1", "c4", "a1>", "c3", "a1", "c2", "a1>", "d2"]:
-		game.play(m)
-	_refresh(false)
+	_play_setup(["d4", "a4", "a1", "d3", "b1", "c4", "a1>", "c3", "a1", "c2", "a1>", "d2"])
 	_click("b1")
 	_adjust_carry(-1)
-	print("wheel carry: n=", sel.get("n"), " (expect 2), label: ", hand_label.text)
+	_check(sel.get("n") == 2, "wheel carry: n=2 (label: %s)" % hand_label.text)
 	_click("c1")
 	_adjust_carry(1)
-	print("wheel drop: ", sel.get("drops"), " (expect [2]), label: ", hand_label.text, " targets ", _next_targets(), " (expect [c1])")
+	_check(sel.get("drops") == [2] and _next_targets() == ["c1"], "wheel drop: drops [2], targets [c1] (label: %s)" % hand_label.text)
 	_adjust_carry(1)
-	print("wheel clamped: ", sel.get("drops"), " (expect [2])")
+	_check(sel.get("drops") == [2], "wheel clamped at [2]")
 	_click("c1")
-	print("result: b1=", stacks.get("b1", "-"), " c1=", stacks.get("c1", "-"), " (expect 1 11), sel empty: ", sel.is_empty())
+	_check(stacks.get("b1", "-") == "1" and stacks.get("c1", "-") == "11" and sel.is_empty(), "result: b1=1 c1=11, sel empty")
 	await _wait_ai()
-	get_tree().quit()
+
+	# Wheel to the ready state: the wheel empties the hand but never plays.
+	_new_game()
+	_play_setup(["d4", "a4", "a1", "d3", "b1", "c4", "a1>", "c3", "a1", "c2", "a1>", "d2"])
+	_click("b1")
+	_adjust_carry(-1)
+	_click("c1")
+	_adjust_carry(1)
+	await get_tree().create_timer(0.2).timeout
+	_check(not sel.is_empty() and _remaining() == 0, "ready: wheel emptied the hand but did not play")
+	var rb: Array = view._nodes["b1"]
+	_check(absf((rb[1] as Node3D).global_position.y - view.BOARD_TOP) < 0.02 and absf((rb[2] as Node3D).global_position.y - (view.BOARD_TOP + 0.2)) < 0.02, "ready: both stones rest on c1")
+	_check(hand_label.text.begins_with("Hand empty"), "ready: HUD says '%s'" % hand_label.text)
+	_click("c1")
+	_check(sel.is_empty() and stacks.get("c1", "-") == "11", "ready: click on c1 plays, c1=11")
+	await _wait_ai()
+
+	# Take-back and digit keys.
+	_new_game()
+	_play_setup(["d4", "a4", "a1", "d3", "b1", "c4", "a1>", "c3", "a1", "c2", "a1>", "d2"])
+	_click("b1")
+	_click("c1")
+	_click("d1")
+	_check(sel.get("drops") == [1, 1], "step-back setup: drops [1, 1]")
+	_step_back()
+	await get_tree().create_timer(0.2).timeout
+	_check(sel.get("drops") == [1], "step back: drops [1]")
+	var sb: Array = view._nodes["b1"]
+	var c1y: float = view.BOARD_TOP
+	_check(absf((sb[1] as Node3D).global_position.y - (c1y + 0.2 + view.LIFT)) < 0.02 and absf((sb[2] as Node3D).global_position.y - (c1y + 0.4 + view.LIFT)) < 0.02 and absf((sb[1] as Node3D).global_position.x - view.square_pos("c1").x) < 0.05, "step back: hand of two above c1")
+	_step_back()
+	await get_tree().create_timer(0.2).timeout
+	_check(sel.get("drops") == [] and sel.get("dir") == "" and sel.get("n") == 3, "step back: pick-up step, n=3")
+	var lifted := 0
+	for node in view._nodes["b1"]:
+		if (node.position as Vector3).y > (node.get_meta("home") as Vector3).y + view.LIFT * 0.5:
+			lifted += 1
+	_check(lifted == 3, "step back: three nodes lifted over b1 (%d)" % lifted)
+	_step_back()
+	_check(sel.is_empty(), "step back with nothing dealt cancels")
+
+	_click("b1")
+	_click("c1")
+	_set_drop(3)
+	_check(sel.get("drops") == [3] and not sel.is_empty() and _next_targets() == ["c1"], "set_drop(3): drops [3], targets [c1]")
+	_set_drop(9)
+	_check(sel.get("drops") == [3], "set_drop(9) clamps to 3")
+	_set_drop(0)
+	_check(sel.get("drops") == [1], "set_drop(0) clamps to 1")
+	_set_drop(3)
+	_click("c1")
+	_check(not stacks.has("b1") and stacks.get("c1", "-") == "111", "3b1> played: b1 gone, c1=111 (got %s)" % stacks.get("c1", "-"))
+	await _wait_ai()
+
+	# Walled-in flat: selecting it does nothing.
+	size = 5
+	_new_game()
+	_play_setup(["a5", "e1", "c3", "Sc4", "a1", "Sb3", "b1", "Sd3", "a2", "Sc2"])
+	_click("c3")
+	_check(sel.is_empty(), "walled-in flat on c3 does not select")
+
+	# Walled-in capstone: it may only travel alone, so carry 1 is the only legal count.
+	_new_game()
+	_play_setup(["a5", "e1", "c3", "Sc4", "Cb3", "Sd3", "b3>", "Sb3", "a1", "Sc2"])
+	_check(stacks.get("c3", "") == "11C", "c3 is 11C (got %s)" % stacks.get("c3", ""))
+	_click("c3")
+	_check(sel.get("n") == 1 and _next_targets().size() == 4, "walled-in cap: n=1 with four targets (n=%s, %s)" % [sel.get("n"), _next_targets()])
+	_set_carry(2)
+	_check(sel.get("n") == 1, "_set_carry(2) ignored")
+	_adjust_carry(1)
+	_check(sel.get("n") == 1, "_adjust_carry(1) ignored")
+	_cancel()
+
+	print("selftest: ", _fails, " failure(s)")
+	get_tree().quit(1 if _fails > 0 else 0)
+
+
+func _play_setup(moves: Array) -> void:
+	for m in moves:
+		var err := game.play(m)
+		if err != "":
+			_check(false, "setup %s: %s" % [m, err])
+	_refresh(false)

@@ -13,6 +13,8 @@ const CAP_R := 0.24
 const CAP_H := 0.7
 const LIFT := 0.22
 const BAR := 0.5
+const DIRS := {"+": Vector2i(0, 1), "-": Vector2i(0, -1), "<": Vector2i(-1, 0), ">": Vector2i(1, 0)}
+const FOOT := 0.62      # pick column footprint: stones are 0.62 wide, caps narrower, jitter 0.012
 
 var size := 5
 var _pieces: Node3D
@@ -20,6 +22,10 @@ var _marks: Node3D
 var _road: Node3D
 var _prev := {}
 var _nodes := {}   # square -> Array of piece nodes, bottom to top
+var _base_top := {} # square -> top height of its stack above the board (from _build_stack)
+var _col_top := {}  # square -> height a click is tested against; base unless the hand is lifted
+var _badges := {}   # square -> count badge node
+var _preview_hidden := {}   # squares whose badge is hidden while a move is previewed
 var _slides := {}  # square -> { from: Vector3 world, count: int, group: int } for the move being shown
 var _move_re := RegEx.create_from_string("^(\\d?)([a-h][1-8])([+\\-<>])(\\d*)$")
 var _flat_mesh: ArrayMesh
@@ -129,8 +135,12 @@ func set_yaw(yaw: float) -> void:
 
 func set_counts(on: bool) -> void:
 	counts_visible = on
-	for b in get_tree().get_nodes_in_group("count_label"):
-		(b as Node3D).visible = on
+	_apply_badges()
+
+
+func _apply_badges() -> void:
+	for sq in _badges:
+		(_badges[sq] as Node3D).visible = counts_visible and not _preview_hidden.has(sq)
 
 
 func set_coords(on: bool) -> void:
@@ -196,6 +206,26 @@ func world_to_square(p: Vector3) -> String:
 	return square_name(f, r)
 
 
+## Square under a screen ray: the nearest square column (stack height and lifted hand included)
+## the ray passes through, else the board plane. Assumes this node sits at the origin, unrotated.
+func pick(origin: Vector3, dir: Vector3) -> String:
+	var best := ""
+	var best_d := INF
+	for sq in _col_top:
+		var p := square_pos(sq)
+		var box := AABB(p - Vector3(FOOT * 0.5, 0, FOOT * 0.5), Vector3(FOOT, float(_col_top[sq]) + 0.001, FOOT))
+		var hit: Variant = box.intersects_ray(origin, dir)
+		if hit != null and origin.distance_to(hit) < best_d:
+			best_d = origin.distance_to(hit)
+			best = sq
+	if best != "":
+		return best
+	var plane_hit: Variant = Plane(Vector3.UP, BOARD_TOP).intersects_ray(origin, dir)
+	if plane_hit == null:
+		return ""
+	return world_to_square(plane_hit)
+
+
 # ---- position ----------------------------------------------------------------
 
 ## "1,x,1S,2/x3,.. 1 4" -> { "a1": "12", "c4": "1S" } bottom-to-top, trailing S/C marks the top piece.
@@ -219,6 +249,10 @@ func show_position(stacks: Dictionary, animate: bool, ptn: String = "") -> void:
 	for c in _pieces.get_children():
 		c.queue_free()
 	_nodes = {}
+	_base_top = {}
+	_col_top = {}
+	_badges = {}
+	_preview_hidden = {}
 	_slides = _slides_for(ptn) if animate else {}
 	for sq in stacks:
 		var changed: bool = animate and _prev.get(sq, "") != stacks[sq]
@@ -285,6 +319,8 @@ func _build_stack(sq: String, s: String, animate: bool) -> Node3D:
 		piece.position = jitter + Vector3(0, y, 0)
 		root.add_child(piece)
 		piece.set_meta("base_y", y)
+		piece.set_meta("home", piece.position)
+		piece.set_meta("h", h)
 		nodes.append(piece)
 		top_y = y + h
 		var slide: Variant = _slides.get(sq)
@@ -298,8 +334,10 @@ func _build_stack(sq: String, s: String, animate: bool) -> Node3D:
 			tw.tween_property(piece, "position:y", final_y, 0.3).set_delay(0.05 * i).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 		y += h if not (top and mod != "") else 0.0
 	_nodes[sq] = nodes
+	_base_top[sq] = top_y
+	_col_top[sq] = top_y
 	if nodes.size() >= 2:
-		_add_count(root, nodes.size(), top_y)
+		_badges[sq] = _add_count(root, nodes.size(), top_y)
 	return root
 
 
@@ -319,7 +357,7 @@ func _slide_in(piece: Node3D, dest_world: Vector3, slide: Dictionary, index_in_g
 
 ## Stack height as a small badge floating above the stack: a dark opaque disc with the number
 ## on it. It always faces the camera and stays the same size on screen, whatever the distance.
-func _add_count(root: Node3D, count: int, top_y: float) -> void:
+func _add_count(root: Node3D, count: int, top_y: float) -> Node3D:
 	var badge := Node3D.new()
 	badge.set_meta("top_y", top_y)
 	badge.position = _badge_pos(top_y)
@@ -347,6 +385,7 @@ func _add_count(root: Node3D, count: int, top_y: float) -> void:
 	l.modulate = Color(1.0, 0.92, 0.72)
 	badge.add_child(l)
 	root.add_child(badge)
+	return badge
 
 
 ## Just in front of the stack's top, toward the camera, so on screen it sits against its own
@@ -376,16 +415,86 @@ func _badge_texture() -> ImageTexture:
 	return _badge_tex
 
 
-## Lift the top `n` stones of a stack so the player sees how many are in hand.
-func set_lift(sq: String, n: int) -> void:
-	for key in _nodes:
-		var nodes: Array = _nodes[key]
-		for i in nodes.size():
-			var lifted: bool = key == sq and i >= nodes.size() - n
-			var node: Node3D = nodes[i]
-			var want := (node.get_meta("base_y") as float) + (LIFT if lifted else 0.0)
-			if absf(node.position.y - want) > 0.001:
-				node.create_tween().tween_property(node, "position:y", want, 0.12).set_ease(Tween.EASE_OUT)
+## Square `k` steps from `sq` along `dir` ("+" "-" "<" ">"), or "" off the board.
+func _step(sq: String, dir: String, k: int) -> String:
+	var d: Vector2i = DIRS[dir]
+	var f := sq.unicode_at(0) - 97 + d.x * k
+	var r := int(sq.substr(1)) + d.y * k
+	if f < 0 or f >= size or r < 1 or r > size:
+		return ""
+	return square_name(f, r)
+
+
+## Move a stone to `target` (local to its stack) with one tween per node. A stone that is at
+## home and stays there is left alone, so it does not fight a fly-in animation.
+func _move_node(node: Node3D, target: Vector3) -> void:
+	var home: Vector3 = node.get_meta("home")
+	var is_home := target.is_equal_approx(home)
+	if is_home and not node.get_meta("moved", false):
+		return
+	node.set_meta("moved", not is_home)
+	if node.has_meta("tw") and (node.get_meta("tw") as Tween).is_valid():
+		(node.get_meta("tw") as Tween).kill()
+	var tw := node.create_tween()
+	tw.tween_property(node, "position", target, 0.12).set_ease(Tween.EASE_OUT)
+	node.set_meta("tw", tw)
+
+
+## Show a move in progress on the board itself: the top `n` stones of `src` are the hand; the
+## first drops[0] sit on the next square along `dir`, the next drops[1] on the one after, and
+## the rest hover over the current square. src == "" puts everything back.
+func set_preview(src: String, n: int, dir: String, drops: Array) -> void:
+	_col_top = _base_top.duplicate()
+	_preview_hidden = {}
+	if src == "" or not _nodes.has(src):
+		for sq in _nodes:
+			for node in _nodes[sq]:
+				_move_node(node, node.get_meta("home"))
+		_apply_badges()
+		return
+	for sq in _nodes:
+		if sq != src:
+			for node in _nodes[sq]:
+				_move_node(node, node.get_meta("home"))
+	var nodes: Array = _nodes[src]
+	var first := nodes.size() - n
+	for i in first:
+		_move_node(nodes[i], nodes[i].get_meta("home"))
+	var src_pos := square_pos(src)
+	var stay_top: float = (nodes[first].get_meta("base_y") as float) if first < nodes.size() else float(_base_top[src])
+	_col_top[src] = stay_top
+	_preview_hidden[src] = true
+	var cur := src
+	var cur_top := stay_top
+	var idx := first
+	for gi in drops.size():
+		var d := _step(src, dir, gi + 1)
+		if d == "":
+			break
+		var top: float = _base_top.get(d, 0.0)
+		var off := square_pos(d) - src_pos
+		for j in int(drops[gi]):
+			if idx >= nodes.size():
+				break
+			var node: Node3D = nodes[idx]
+			var home: Vector3 = node.get_meta("home")
+			_move_node(node, Vector3(home.x + off.x, top, home.z + off.z))
+			top += node.get_meta("h") as float
+			idx += 1
+		_col_top[d] = top
+		_preview_hidden[d] = true
+		cur = d
+		cur_top = top
+	var off_cur := square_pos(cur) - src_pos
+	var hand_y := cur_top + LIFT
+	for k in range(idx, nodes.size()):
+		var node: Node3D = nodes[k]
+		var home: Vector3 = node.get_meta("home")
+		_move_node(node, Vector3(home.x + off_cur.x, hand_y, home.z + off_cur.z))
+		hand_y += node.get_meta("h") as float
+	if idx < nodes.size():
+		_col_top[cur] = hand_y
+	_apply_badges()
 
 
 # ---- highlights --------------------------------------------------------------

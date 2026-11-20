@@ -14,9 +14,12 @@ fan project and is not affiliated with or endorsed by them or Cheapass Games.
 - Computer opponent (Tiltak) at three strengths: Easy, Medium and Hard.
 - Play as white or black.
 - Stack moves slide stone by stone from the source square, and a winning road glows gold.
-- "Pick up N" and "Drop N" labels show what is in your hand; the mouse wheel sets both counts.
+- Moving a stack is previewed on the board: stones you have dealt appear on their squares, the rest
+  hover as your hand, and "Pick up N" / "Drop N" labels say what you are holding. The mouse wheel or
+  number keys set both counts, and a stone can be taken back before the move is played.
 - Rotate the board with `Q` and `E` to look at a position from any side.
-- Checkboxes toggle the board coordinates (on by default) and the stack-size numbers (off by default).
+- Checkboxes toggle the board coordinates (on by default) and the stack sizes (off by default),
+  shown as small camera-facing badges against each stack.
 - Procedurally generated wood board and stones, with shadows, ambient occlusion and glow.
   There are no art assets to download.
 - A terminal version for quick games and testing.
@@ -90,11 +93,12 @@ cargo run --release -p tak-cli -- 5 medium     # size 4|5|6, level easy|medium|h
 | Place a stone | Click an empty square |
 | Choose stone (flat) / wall / capstone | `S`, `W`, `C` or the buttons at the bottom. The choice goes back to flat after each placement |
 | Move a stack | Click a stack of yours, then click where it goes |
-| Choose how many stones to pick up | Mouse wheel (or keys `1`-`6`) after clicking the stack. The top-left shows "Pick up N" |
-| Choose how many to drop on a square | Mouse wheel after clicking the square. The top-left shows "Drop N on c1". Click that square again to finish once nothing is left in hand |
+| Choose how many stones to pick up | Mouse wheel (or keys `1`-`8`) after clicking the stack. The top-left shows "Pick up N" |
+| Choose how many to drop on a square | Mouse wheel or keys `1`-`8` after clicking the square. The top-left shows "Drop N on c1". Click that square again to finish once nothing is left in hand |
 | Drop one more on the same square | Click that square again |
-| Continue to the next square | Click the next square along the line. The move plays when the hand is empty |
-| Cancel a move | Right-click or `Esc` |
+| Continue to the next square | Click the next square along the line. The move plays when the last stone is dropped by a click. If the wheel or a digit key empties the hand, the move waits in a "Hand empty" (ready) state, showing the finished board: click the highlighted square to play it, or wheel down to take some back |
+| Take one stone back | Right-click or `Backspace`. Steps back through the squares you have dealt to, then to the pick-up step; with nothing dealt it cancels |
+| Cancel a move | `Esc`, or click the stack you picked up |
 | Rotate the board | `Q` / `E` turn it left / right in 45° steps; `R` returns to the default view. The labels turn with the board |
 | Undo | `U`, `Ctrl+Z` or the Undo button. Takes back your last move and the engine's reply; if the engine is still thinking, its search is cancelled |
 
@@ -121,9 +125,10 @@ godot --path godot -- --selftest                      # scripted click-through o
 godot --path godot -- --shot=/tmp/x.png --size=6 --plies=30    # screenshot of a sample position
 ```
 
-The self-test checks that screen picking maps to the right square on every square, then plays real
-clicks: placing a stone, moving one stone, moving a three-stone stack across two squares, and a
-wheel-driven move that picks up two stones and drops both on one square.
+The self-test checks every assertion with a pass or fail line and exits non-zero if any fail. It
+covers screen picking on every square at several board rotations (including tall stacks and the
+lifted hand), placing and undoing, moving stacks by click and by mouse wheel, the dealt-stone
+preview, the "Hand empty" ready state, taking stones back, and stacks with no legal move.
 
 ## Difficulty levels
 
