@@ -52,11 +52,27 @@ func _ready() -> void:
 			counts_box.button_pressed = true
 		elif a.begins_with("--size="):
 			size = int(a.substr(7))
+	if demo_shot == "" and not "--selftest" in args:
+		_fit_window()
 	_new_game()
 	if demo_shot != "":
 		_run_demo(args)
 	elif "--selftest" in args:
 		_run_selftest()
+
+
+## The design size is 1600x900, which overflows small laptop screens. Open at most 92% of the
+## usable screen (never above 1600x900), centred, and let the window be resized down to 800x450.
+func _fit_window() -> void:
+	var win := get_window()
+	var usable := DisplayServer.screen_get_usable_rect(DisplayServer.window_get_current_screen())
+	win.min_size = Vector2i(800, 450)
+	var want := Vector2i(1600, 900)
+	var room := Vector2i(Vector2(usable.size) * 0.92)
+	var fit := minf(float(room.x) / want.x, float(room.y) / want.y)
+	if fit < 1.0:
+		win.size = Vector2i(Vector2(want) * fit)
+		win.position = usable.position + (usable.size - win.size) / 2
 
 
 # ---- scene -------------------------------------------------------------------
